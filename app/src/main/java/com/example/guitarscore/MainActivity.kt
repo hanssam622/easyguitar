@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Tune
@@ -68,6 +70,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -75,6 +78,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.graphicsLayer
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -385,36 +390,27 @@ private fun ScoreRow(score: ScoreEntity, onClick: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ViewerScreen(state: MainUiState, viewModel: MainViewModel) {
-    val selected = state.selected ?: return
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text(selected.score.title, maxLines = 1) },
-                navigationIcon = {
-                    IconButton(onClick = viewModel::closeScore) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "라이브러리")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = viewModel::toggleFavorite) {
-                        Icon(if (selected.score.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "즐겨찾기")
-                    }
-                    IconButton(onClick = viewModel::toggleTuner) {
-                        Icon(Icons.Default.Tune, contentDescription = "튜너")
-                    }
-                }
-            )
-        },
-        bottomBar = { TransportBar(state, viewModel) }
-    ) { padding ->
-        Row(
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF171A1F))
+    ) {
+        PdfPane(state, viewModel, modifier = Modifier.fillMaxSize())
+        PerformanceToolbar(
+            state = state,
+            viewModel = viewModel,
             modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFF171A1F))
-                .padding(padding)
-        ) {
-            PdfPane(state, viewModel, modifier = Modifier.weight(1f))
-            ControlPane(state, viewModel, modifier = Modifier.width(320.dp).fillMaxHeight())
+                .align(Alignment.TopCenter)
+                .padding(10.dp)
+        )
+        PagePill(
+            state = state,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 10.dp)
+        )
+        if (state.tunerVisible) {
+            TunerOverlay(onDismiss = viewModel::toggleTuner)
         }
     }
 }
@@ -479,10 +475,75 @@ private fun ControlPane(state: MainUiState, viewModel: MainViewModel, modifier: 
             }
             if (state.tunerVisible) {
                 item {
-                    TunerPanel()
+                    TunerOverlay(onDismiss = viewModel::toggleTuner)
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PerformanceToolbar(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
+    val selected = state.selected ?: return
+    val metadata = selected.metadata
+    Surface(
+        modifier = modifier,
+        color = Color(0xEE101418),
+        contentColor = Color.White,
+        tonalElevation = 4.dp,
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Row(
+            modifier = Modifier.height(48.dp).padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            IconButton(onClick = viewModel::closeScore) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "라이브러리")
+            }
+            IconButton(onClick = viewModel::previousPage) {
+                Icon(Icons.Default.SkipPrevious, contentDescription = "이전 페이지")
+            }
+            IconButton(onClick = viewModel::nextPage) {
+                Icon(Icons.Default.SkipNext, contentDescription = "다음 페이지")
+            }
+            IconButton(onClick = { viewModel.setBpm(metadata.bpm - 1) }) {
+                Icon(Icons.Default.Remove, contentDescription = "BPM 낮추기")
+            }
+            Text("${metadata.bpm}", fontWeight = FontWeight.Bold, modifier = Modifier.width(38.dp))
+            IconButton(onClick = { viewModel.setBpm(metadata.bpm + 1) }) {
+                Icon(Icons.Default.Add, contentDescription = "BPM 올리기")
+            }
+            IconButton(onClick = { if (state.autoTurnState.running) viewModel.stopAutoTurn() else viewModel.startAutoTurn() }) {
+                Icon(if (state.autoTurnState.running) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "자동 넘김")
+            }
+            IconButton(onClick = viewModel::recordCue) {
+                Icon(Icons.Default.SkipNext, contentDescription = "큐 기록")
+            }
+            IconButton(onClick = { viewModel.nudge(-1_000) }) {
+                Icon(Icons.Default.FastRewind, contentDescription = "1초 당기기")
+            }
+            IconButton(onClick = { viewModel.nudge(1_000) }) {
+                Icon(Icons.Default.FastForward, contentDescription = "1초 늦추기")
+            }
+            IconButton(onClick = viewModel::toggleTuner) {
+                Icon(Icons.Default.Tune, contentDescription = "기타 튜너")
+            }
+            IconButton(onClick = viewModel::toggleFavorite) {
+                Icon(if (selected.score.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "즐겨찾기")
+            }
+        }
+    }
+}
+
+@Composable
+private fun PagePill(state: MainUiState, modifier: Modifier = Modifier) {
+    Surface(modifier = modifier, color = Color(0xCC101418), contentColor = Color.White, shape = MaterialTheme.shapes.medium) {
+        Text(
+            "Page ${state.pageIndex + 1} / ${state.pageCount} · ${"%.1f".format(state.autoTurnState.elapsedBeats)} beat",
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.bodyMedium
+        )
     }
 }
 
@@ -559,7 +620,7 @@ private fun TransportBar(state: MainUiState, viewModel: MainViewModel) {
 }
 
 @Composable
-private fun TunerPanel() {
+private fun TunerOverlay(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val engine = remember { TunerEngine(context.applicationContext) }
     val reading by engine.reading.collectAsState()
@@ -573,13 +634,81 @@ private fun TunerPanel() {
     DisposableEffect(Unit) {
         onDispose { engine.stop() }
     }
-    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("튜너", fontWeight = FontWeight.SemiBold)
-            Text(reading.note, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
-            Text("${reading.frequency.toInt()} Hz · ${reading.cents} cents")
-            Text(if (reading.inTune) "In tune" else "Adjust")
-            Text("프리셋: ${builtInTunings.joinToString { it.name }}", style = MaterialTheme.typography.bodySmall)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.width(420.dp).clickable(enabled = false) {},
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFDFBF7))
+        ) {
+            Column(
+                Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("기타 튜너", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) { Text("닫기") }
+                }
+                TunerGauge(cents = reading.cents, inTune = reading.inTune)
+                Text(reading.targetNote, style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    when {
+                        reading.frequency == 0f -> "현을 하나씩 튕겨 주세요"
+                        reading.inTune -> "정확합니다"
+                        reading.cents < 0 -> "낮습니다 · 조이세요"
+                        else -> "높습니다 · 푸세요"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (reading.inTune) Color(0xFF2F7D4F) else Color(0xFF9A5A12)
+                )
+                Text("${reading.frequency.toInt()} Hz · ${reading.cents} cents · detected ${reading.note}")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    builtInTunings.forEach { preset ->
+                        Surface(color = Color(0xFFECE7DA), shape = MaterialTheme.shapes.small) {
+                            Text(preset.name, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                        }
+                    }
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun TunerGauge(cents: Int, inTune: Boolean) {
+    val normalized = (cents.coerceIn(-50, 50) / 50f)
+    Canvas(modifier = Modifier.fillMaxWidth().height(170.dp)) {
+        val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height * 0.88f)
+        val radius = size.minDimension * 0.78f
+        for (i in -5..5) {
+            val angle = Math.toRadians((270 + i * 12).toDouble())
+            val inner = radius * if (i == 0) 0.72f else 0.8f
+            val outer = radius * 0.95f
+            drawLine(
+                color = if (i == 0) Color(0xFF2F7D4F) else Color(0xFF81796A),
+                start = androidx.compose.ui.geometry.Offset(center.x + cos(angle).toFloat() * inner, center.y + sin(angle).toFloat() * inner),
+                end = androidx.compose.ui.geometry.Offset(center.x + cos(angle).toFloat() * outer, center.y + sin(angle).toFloat() * outer),
+                strokeWidth = if (i == 0) 6f else 3f,
+                cap = StrokeCap.Round
+            )
+        }
+        val needleAngle = Math.toRadians((270 + normalized * 60).toDouble())
+        drawLine(
+            color = if (inTune) Color(0xFF2F7D4F) else Color(0xFFD18B22),
+            start = center,
+            end = androidx.compose.ui.geometry.Offset(
+                center.x + cos(needleAngle).toFloat() * radius * 0.72f,
+                center.y + sin(needleAngle).toFloat() * radius * 0.72f
+            ),
+            strokeWidth = 8f,
+            cap = StrokeCap.Round
+        )
+        drawCircle(color = Color(0xFF222222), radius = 11f, center = center)
     }
 }

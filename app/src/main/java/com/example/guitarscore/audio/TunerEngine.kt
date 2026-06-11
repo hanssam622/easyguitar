@@ -21,6 +21,7 @@ import kotlin.math.roundToInt
 data class TunerReading(
     val frequency: Float = 0f,
     val note: String = "--",
+    val targetNote: String = "--",
     val cents: Int = 0,
     val inTune: Boolean = false
 )
@@ -93,12 +94,25 @@ class TunerEngine(private val context: Context) {
     }
 
     private fun toReading(frequency: Float): TunerReading {
-        val midi = (69 + 12 * ln(frequency / 440.0) / ln(2.0)).roundToInt()
-        val target = 440.0 * 2.0.pow((midi - 69) / 12.0)
-        val cents = (1200 * ln(frequency / target) / ln(2.0)).roundToInt()
+        val targetMidi = guitarStringMidis.minBy { midi ->
+            abs(frequency - midiToFrequency(midi))
+        }
+        val detectedMidi = (69 + 12 * ln(frequency / 440.0) / ln(2.0)).roundToInt()
+        val target = midiToFrequency(targetMidi)
+        val cents = (1200 * ln(frequency / target) / ln(2.0)).roundToInt().coerceIn(-50, 50)
         val names = listOf("C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
-        val octave = midi / 12 - 1
-        val note = "${names[((midi % 12) + 12) % 12]}$octave"
-        return TunerReading(frequency, note, cents, abs(cents) <= 5)
+        val detectedOctave = detectedMidi / 12 - 1
+        val targetOctave = targetMidi / 12 - 1
+        val note = "${names[((detectedMidi % 12) + 12) % 12]}$detectedOctave"
+        val targetNote = "${names[((targetMidi % 12) + 12) % 12]}$targetOctave"
+        return TunerReading(frequency, note, targetNote, cents, abs(cents) <= 5)
     }
+
+    private fun midiToFrequency(midi: Int): Double = 440.0 * 2.0.pow((midi - 69) / 12.0)
+
+    private val guitarStringMidis = listOf(
+        40, 45, 50, 55, 59, 64,
+        38, 44, 49, 54, 58, 64,
+        39, 44, 49, 54, 58, 63
+    )
 }
