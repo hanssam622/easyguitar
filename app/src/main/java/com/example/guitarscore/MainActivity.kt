@@ -16,6 +16,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -38,6 +41,7 @@ import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -141,8 +145,12 @@ data class MainUiState(
     val pageBitmap: android.graphics.Bitmap? = null,
     val autoTurnState: AutoTurnState = AutoTurnState(),
     val metronomeRunning: Boolean = false,
-    val tunerVisible: Boolean = false
+    val tunerVisible: Boolean = false,
+    val toolbarExpanded: Boolean = false,
+    val progressMode: ProgressMode = ProgressMode.PageTurn
 )
+
+enum class ProgressMode { PageTurn, Scroll }
 
 class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
@@ -270,6 +278,8 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
 
     fun nudge(deltaMillis: Long) = autoTurn.nudge(deltaMillis)
     fun toggleTuner() = _uiState.run { value = value.copy(tunerVisible = !value.tunerVisible) }
+    fun toggleToolbarExpanded() = _uiState.run { value = value.copy(toolbarExpanded = !value.toolbarExpanded) }
+    fun setProgressMode(mode: ProgressMode) = _uiState.run { value = value.copy(progressMode = mode) }
 
     private suspend fun goToPage(page: Int) {
         val next = page.coerceIn(0, (_uiState.value.pageCount - 1).coerceAtLeast(0))
@@ -418,27 +428,57 @@ private fun ViewerScreen(state: MainUiState, viewModel: MainViewModel) {
 @Composable
 private fun PdfPane(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
     var scale by remember { mutableFloatStateOf(1f) }
+    val scrollState = rememberScrollState()
+    LaunchedEffect(state.progressMode, state.autoTurnState.elapsedBeats, state.pageIndex, scrollState.maxValue) {
+        if (state.progressMode == ProgressMode.Scroll && state.autoTurnState.running && scrollState.maxValue > 0) {
+            val progress = pageScrollProgress(state).coerceIn(0f, 1f)
+            scrollState.scrollTo((scrollState.maxValue * progress).toInt())
+        }
+    }
     Box(modifier = modifier.fillMaxHeight(), contentAlignment = Alignment.Center) {
         state.pageBitmap?.let { bitmap ->
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = "PDF page",
-                contentScale = ContentScale.Fit,
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer(scaleX = scale, scaleY = scale)
+                    .verticalScroll(scrollState)
                     .pointerInput(Unit) {
                         detectTransformGestures { _, _, zoom, _ ->
                             scale = (scale * zoom).coerceIn(0.75f, 3f)
                         }
                     }
-            )
+            ) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "PDF page",
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer(scaleX = scale, scaleY = scale)
+                )
+            }
         } ?: Text("PDF 렌더링 중...", color = Color.White)
-        Row(Modifier.fillMaxSize()) {
-            Box(Modifier.weight(1f).fillMaxHeight().clickable { viewModel.previousPage() })
-            Box(Modifier.weight(1f).fillMaxHeight().clickable { viewModel.nextPage() })
+        if (state.progressMode == ProgressMode.PageTurn) {
+            Row(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f).fillMaxHeight().clickable { viewModel.previousPage() })
+                Box(Modifier.weight(1f).fillMaxHeight().clickable { viewModel.nextPage() })
+            }
         }
     }
+}
+
+private fun pageScrollProgress(state: MainUiState): Float {
+    val currentPage = state.pageIndex
+    val currentBeat = state.autoTurnState.elapsedBeats
+    val previousBeat = state.cues
+        .filter { it.pageIndex <= currentPage }
+        .mapNotNull { it.triggerBeat }
+        .maxOrNull() ?: (currentPage * 32f)
+    val nextBeat = state.cues
+        .filter { it.pageIndex == currentPage + 1 }
+        .mapNotNull { it.triggerBeat }
+        .minOrNull() ?: (previousBeat + 32f)
+    val span = (nextBeat - previousBeat).coerceAtLeast(1f)
+    return (currentBeat - previousBeat) / span
 }
 
 @Composable
@@ -493,32 +533,81 @@ private fun PerformanceToolbar(state: MainUiState, viewModel: MainViewModel, mod
         tonalElevation = 4.dp,
         shape = MaterialTheme.shapes.medium
     ) {
-        Row(
-            modifier = Modifier.height(48.dp).padding(horizontal = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            IconButton(onClick = viewModel::closeScore) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "라이브러리")
+        Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+            Row(
+                modifier = Modifier.height(44.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                IconButton(onClick = viewModel::closeScore) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "라이브러리")
+                }
+                IconButton(onClick = viewModel::previousPage) {
+                    Icon(Icons.Default.SkipPrevious, contentDescription = "이전 페이지")
+                }
+                IconButton(onClick = { if (state.autoTurnState.running) viewModel.stopAutoTurn() else viewModel.startAutoTurn() }) {
+                    Icon(if (state.autoTurnState.running) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "자동 진행")
+                }
+                IconButton(onClick = viewModel::nextPage) {
+                    Icon(Icons.Default.SkipNext, contentDescription = "다음 페이지")
+                }
+                Text("${metadata.bpm}", fontWeight = FontWeight.Bold, modifier = Modifier.width(38.dp))
+                IconButton(onClick = viewModel::toggleTuner) {
+                    Icon(Icons.Default.Tune, contentDescription = "기타 튜너")
+                }
+                IconButton(onClick = viewModel::toggleToolbarExpanded) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "상세 설정")
+                }
             }
-            IconButton(onClick = viewModel::previousPage) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = "이전 페이지")
+            if (state.toolbarExpanded) {
+                ExpandedToolbarPanel(state = state, viewModel = viewModel)
             }
-            IconButton(onClick = viewModel::nextPage) {
-                Icon(Icons.Default.SkipNext, contentDescription = "다음 페이지")
-            }
+        }
+    }
+}
+
+@Composable
+private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
+    val selected = state.selected ?: return
+    val metadata = selected.metadata
+    Column(
+        modifier = Modifier.width(520.dp).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             IconButton(onClick = { viewModel.setBpm(metadata.bpm - 1) }) {
                 Icon(Icons.Default.Remove, contentDescription = "BPM 낮추기")
             }
-            Text("${metadata.bpm}", fontWeight = FontWeight.Bold, modifier = Modifier.width(38.dp))
+            Column(Modifier.weight(1f)) {
+                Text("BPM ${metadata.bpm}", fontWeight = FontWeight.SemiBold)
+                Slider(
+                    value = metadata.bpm.toFloat(),
+                    onValueChange = { viewModel.setBpm(it.toInt()) },
+                    valueRange = 40f..220f
+                )
+            }
             IconButton(onClick = { viewModel.setBpm(metadata.bpm + 1) }) {
                 Icon(Icons.Default.Add, contentDescription = "BPM 올리기")
             }
-            IconButton(onClick = { if (state.autoTurnState.running) viewModel.stopAutoTurn() else viewModel.startAutoTurn() }) {
-                Icon(if (state.autoTurnState.running) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "자동 넘김")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("박자", fontWeight = FontWeight.SemiBold)
+            listOf(2, 3, 4, 5, 6, 7, 12).forEach { beats ->
+                OutlinedButton(onClick = { viewModel.setTimeSignature(beats) }) {
+                    Text(if (metadata.timeSignature == beats) "✓ ${beats}/4" else "${beats}/4")
+                }
             }
-            IconButton(onClick = viewModel::recordCue) {
-                Icon(Icons.Default.SkipNext, contentDescription = "큐 기록")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("진행", fontWeight = FontWeight.SemiBold)
+            OutlinedButton(onClick = { viewModel.setProgressMode(ProgressMode.PageTurn) }) {
+                Text(if (state.progressMode == ProgressMode.PageTurn) "✓ 페이지" else "페이지")
+            }
+            OutlinedButton(onClick = { viewModel.setProgressMode(ProgressMode.Scroll) }) {
+                Text(if (state.progressMode == ProgressMode.Scroll) "✓ 스크롤" else "스크롤")
+            }
+            OutlinedButton(onClick = viewModel::recordCue) {
+                Text("큐 기록")
             }
             IconButton(onClick = { viewModel.nudge(-1_000) }) {
                 Icon(Icons.Default.FastRewind, contentDescription = "1초 당기기")
@@ -526,12 +615,15 @@ private fun PerformanceToolbar(state: MainUiState, viewModel: MainViewModel, mod
             IconButton(onClick = { viewModel.nudge(1_000) }) {
                 Icon(Icons.Default.FastForward, contentDescription = "1초 늦추기")
             }
-            IconButton(onClick = viewModel::toggleTuner) {
-                Icon(Icons.Default.Tune, contentDescription = "기타 튜너")
-            }
             IconButton(onClick = viewModel::toggleFavorite) {
                 Icon(if (selected.score.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "즐겨찾기")
             }
+        }
+        if (state.cues.isNotEmpty()) {
+            Text(
+                "큐 ${state.cues.size}개 · ${state.cues.take(4).joinToString("  ") { cue -> "${cue.triggerBeat?.let { "%.1f".format(it) } ?: ((cue.triggerMillis ?: 0) / 1000).toString()}→P${cue.pageIndex + 1}" }}",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
@@ -540,7 +632,7 @@ private fun PerformanceToolbar(state: MainUiState, viewModel: MainViewModel, mod
 private fun PagePill(state: MainUiState, modifier: Modifier = Modifier) {
     Surface(modifier = modifier, color = Color(0xCC101418), contentColor = Color.White, shape = MaterialTheme.shapes.medium) {
         Text(
-            "Page ${state.pageIndex + 1} / ${state.pageCount} · ${"%.1f".format(state.autoTurnState.elapsedBeats)} beat",
+            "Page ${state.pageIndex + 1} / ${state.pageCount} · ${"%.1f".format(state.autoTurnState.elapsedBeats)} beat · ${if (state.progressMode == ProgressMode.Scroll) "Scroll" else "Page"}",
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
             style = MaterialTheme.typography.bodyMedium
         )
