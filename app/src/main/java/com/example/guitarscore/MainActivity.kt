@@ -720,8 +720,15 @@ private fun TunerOverlay(onDismiss: () -> Unit) {
         if (granted) engine.start()
     }
     LaunchedEffect(Unit) {
-        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        engine.start()
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            engine.start()
+        } else {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
     DisposableEffect(Unit) {
         onDispose { engine.stop() }
@@ -750,6 +757,7 @@ private fun TunerOverlay(onDismiss: () -> Unit) {
                 Text(reading.targetNote, style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Bold)
                 Text(
                     when {
+                        reading.error != null -> reading.error.orEmpty()
                         reading.frequency == 0f -> "현을 하나씩 튕겨 주세요"
                         reading.inTune -> "정확합니다"
                         reading.cents < 0 -> "낮습니다 · 조이세요"

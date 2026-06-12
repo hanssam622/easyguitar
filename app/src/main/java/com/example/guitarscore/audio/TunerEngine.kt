@@ -7,6 +7,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,7 +24,8 @@ data class TunerReading(
     val note: String = "--",
     val targetNote: String = "--",
     val cents: Int = 0,
-    val inTune: Boolean = false
+    val inTune: Boolean = false,
+    val error: String? = null
 )
 
 data class TuningPreset(val name: String, val notes: List<String>)
@@ -45,20 +47,52 @@ class TunerEngine(private val context: Context) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
         stop()
         val sampleRate = 44_100
-        val bufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT) * 2
-        recorder = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
+        val minBufferSize = AudioRecord.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize
+            AudioFormat.ENCODING_PCM_16BIT
         )
-        recorder?.startRecording()
+        if (minBufferSize <= 0) {
+            _reading.value = TunerReading(error = "마이크 버퍼를 만들 수 없습니다.")
+            return
+        }
+        val bufferSize = minBufferSize * 2
+        val audioRecord = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+        } catch (error: Throwable) {
+            _reading.value = TunerReading(error = "마이크를 열 수 없습니다.")
+            return
+        }
+        if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
+            audioRecord.release()
+            _reading.value = TunerReading(error = "마이크 초기화에 실패했습니다.")
+            return
+        }
+        try {
+            audioRecord.startRecording()
+        } catch (error: Throwable) {
+            audioRecord.release()
+            _reading.value = TunerReading(error = "마이크 녹음을 시작할 수 없습니다.")
+            return
+        }
+        recorder = audioRecord
         job = scope.launch {
             val buffer = ShortArray(bufferSize / 2)
-            while (true) {
-                val read = recorder?.read(buffer, 0, buffer.size) ?: 0
-                if (read > 0) detectPitch(buffer, read, sampleRate)?.let { _reading.value = toReading(it) }
+            try {
+                while (true) {
+                    val read = recorder?.read(buffer, 0, buffer.size) ?: 0
+                    if (read > 0) detectPitch(buffer, read, sampleRate)?.let { _reading.value = toReading(it) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _reading.value = TunerReading(error = "마이크 입력을 읽을 수 없습니다.")
             }
         }
     }
@@ -66,8 +100,16 @@ class TunerEngine(private val context: Context) {
     fun stop() {
         job?.cancel()
         job = null
-        recorder?.stop()
-        recorder?.release()
+        recorder?.let { audioRecord ->
+            try {
+                if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    audioRecord.stop()
+                }
+            } catch (_: Throwable) {
+            } finally {
+                audioRecord.release()
+            }
+        }
         recorder = null
     }
 
