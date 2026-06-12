@@ -71,6 +71,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -143,6 +144,7 @@ data class MainUiState(
     val pageIndex: Int = 0,
     val pageCount: Int = 0,
     val pageBitmap: android.graphics.Bitmap? = null,
+    val scrollPageBitmaps: Map<Int, android.graphics.Bitmap> = emptyMap(),
     val autoTurnState: AutoTurnState = AutoTurnState(),
     val metronomeRunning: Boolean = false,
     val tunerVisible: Boolean = false,
@@ -190,6 +192,7 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
                 selected = selected,
                 pageIndex = pageIndex,
                 pageCount = pageCount,
+                scrollPageBitmaps = emptyMap(),
                 metronomeRunning = false,
                 autoTurnState = AutoTurnState()
             )
@@ -280,6 +283,25 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     fun toggleTuner() = _uiState.run { value = value.copy(tunerVisible = !value.tunerVisible) }
     fun toggleToolbarExpanded() = _uiState.run { value = value.copy(toolbarExpanded = !value.toolbarExpanded) }
     fun setProgressMode(mode: ProgressMode) = _uiState.run { value = value.copy(progressMode = mode) }
+    fun goToPageFromScroll(page: Int) {
+        val state = _uiState.value
+        val next = page.coerceIn(0, (state.pageCount - 1).coerceAtLeast(0))
+        if (next != state.pageIndex) {
+            _uiState.value = state.copy(pageIndex = next)
+        }
+    }
+    fun ensureScrollPages() {
+        val state = _uiState.value
+        if (state.pageCount == 0 || state.scrollPageBitmaps.size == state.pageCount) return
+        viewModelScope.launch {
+            val renderer = pdfRenderer ?: return@launch
+            val rendered = linkedMapOf<Int, android.graphics.Bitmap>()
+            for (page in 0 until state.pageCount) {
+                rendered[page] = renderer.renderPage(page, 1400)
+                _uiState.value = _uiState.value.copy(scrollPageBitmaps = rendered.toMap())
+            }
+        }
+    }
 
     private suspend fun goToPage(page: Int) {
         val next = page.coerceIn(0, (_uiState.value.pageCount - 1).coerceAtLeast(0))
@@ -428,6 +450,10 @@ private fun ViewerScreen(state: MainUiState, viewModel: MainViewModel) {
 @Composable
 private fun PdfPane(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
     var scale by remember { mutableFloatStateOf(1f) }
+    if (state.progressMode == ProgressMode.Scroll) {
+        ScrollScorePane(state = state, viewModel = viewModel, scale = scale, onScaleChange = { scale = it }, modifier = modifier)
+        return
+    }
     val scrollState = rememberScrollState()
     LaunchedEffect(state.progressMode, state.autoTurnState.elapsedBeats, state.pageIndex, scrollState.maxValue) {
         if (state.progressMode == ProgressMode.Scroll && state.autoTurnState.running && scrollState.maxValue > 0) {
@@ -466,6 +492,68 @@ private fun PdfPane(state: MainUiState, viewModel: MainViewModel, modifier: Modi
     }
 }
 
+@Composable
+private fun ScrollScorePane(
+    state: MainUiState,
+    viewModel: MainViewModel,
+    scale: Float,
+    onScaleChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val scrollState = rememberScrollState()
+    LaunchedEffect(state.pageCount, state.progressMode) {
+        viewModel.ensureScrollPages()
+    }
+    LaunchedEffect(state.autoTurnState.elapsedBeats, state.autoTurnState.running, scrollState.maxValue, state.scrollPageBitmaps.size) {
+        if (state.autoTurnState.running && scrollState.maxValue > 0) {
+            val progress = documentScrollProgress(state).coerceIn(0f, 1f)
+            scrollState.animateScrollTo((scrollState.maxValue * progress).toInt())
+        }
+    }
+    LaunchedEffect(scrollState.maxValue) {
+        snapshotFlow { scrollState.value }.collect { value ->
+            if (scrollState.maxValue > 0 && state.pageCount > 0) {
+                val page = ((value.toFloat() / scrollState.maxValue) * state.pageCount).toInt()
+                    .coerceIn(0, (state.pageCount - 1).coerceAtLeast(0))
+                if (page != state.pageIndex) viewModel.goToPageFromScroll(page)
+            }
+        }
+    }
+    Box(modifier = modifier.fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(top = 66.dp, bottom = 44.dp)
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, _, zoom, _ ->
+                        onScaleChange((scale * zoom).coerceIn(0.75f, 3f))
+                    }
+                },
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            if (state.scrollPageBitmaps.isEmpty()) {
+                Text("스크롤용 악보 렌더링 중...", color = Color.White, modifier = Modifier.padding(36.dp))
+            } else {
+                for (page in 0 until state.pageCount) {
+                    state.scrollPageBitmaps[page]?.let { bitmap ->
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = "PDF page ${page + 1}",
+                            contentScale = ContentScale.FillWidth,
+                            modifier = Modifier
+                                .fillMaxWidth(0.94f)
+                                .background(Color.White)
+                                .graphicsLayer(scaleX = scale, scaleY = scale)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun pageScrollProgress(state: MainUiState): Float {
     val currentPage = state.pageIndex
     val currentBeat = state.autoTurnState.elapsedBeats
@@ -479,6 +567,13 @@ private fun pageScrollProgress(state: MainUiState): Float {
         .minOrNull() ?: (previousBeat + 32f)
     val span = (nextBeat - previousBeat).coerceAtLeast(1f)
     return (currentBeat - previousBeat) / span
+}
+
+private fun documentScrollProgress(state: MainUiState): Float {
+    val currentBeat = state.autoTurnState.elapsedBeats
+    val lastCueBeat = state.cues.mapNotNull { it.triggerBeat }.maxOrNull()
+    val totalBeats = (lastCueBeat ?: (state.pageCount * 32f)).coerceAtLeast(1f)
+    return currentBeat / totalBeats
 }
 
 @Composable

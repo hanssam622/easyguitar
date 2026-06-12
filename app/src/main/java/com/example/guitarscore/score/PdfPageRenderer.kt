@@ -34,7 +34,7 @@ class PdfPageRenderer(private val context: Context, private val uri: Uri) : Auto
             bitmap.eraseColor(Color.WHITE)
             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             cache[pageIndex] = bitmap
-            while (cache.size > 6) {
+            while (cache.size > 48) {
                 val firstKey = cache.keys.first()
                 cache.remove(firstKey)?.recycle()
             }
