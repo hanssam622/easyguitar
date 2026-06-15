@@ -80,6 +80,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.graphicsLayer
@@ -149,7 +150,9 @@ data class MainUiState(
     val metronomeRunning: Boolean = false,
     val tunerVisible: Boolean = false,
     val toolbarExpanded: Boolean = false,
-    val progressMode: ProgressMode = ProgressMode.PageTurn
+    val progressMode: ProgressMode = ProgressMode.PageTurn,
+    val barsPerLine: Int = 4,
+    val lineScrollDp: Int = 180
 )
 
 enum class ProgressMode { PageTurn, Scroll }
@@ -283,6 +286,8 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     fun toggleTuner() = _uiState.run { value = value.copy(tunerVisible = !value.tunerVisible) }
     fun toggleToolbarExpanded() = _uiState.run { value = value.copy(toolbarExpanded = !value.toolbarExpanded) }
     fun setProgressMode(mode: ProgressMode) = _uiState.run { value = value.copy(progressMode = mode) }
+    fun setBarsPerLine(bars: Int) = _uiState.run { value = value.copy(barsPerLine = bars.coerceIn(1, 8)) }
+    fun setLineScrollDp(dp: Int) = _uiState.run { value = value.copy(lineScrollDp = dp.coerceIn(60, 520)) }
     fun goToPageFromScroll(page: Int) {
         val state = _uiState.value
         val next = page.coerceIn(0, (state.pageCount - 1).coerceAtLeast(0))
@@ -501,13 +506,16 @@ private fun ScrollScorePane(
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
+    val density = LocalDensity.current
+    val lineScrollPx = with(density) { state.lineScrollDp.dp.roundToPx() }
+    val currentLineIndex = autoScrollLineIndex(state)
     LaunchedEffect(state.pageCount, state.progressMode) {
         viewModel.ensureScrollPages()
     }
-    LaunchedEffect(state.autoTurnState.elapsedBeats, state.autoTurnState.running, scrollState.maxValue, state.scrollPageBitmaps.size) {
+    LaunchedEffect(currentLineIndex, state.autoTurnState.running, scrollState.maxValue, state.scrollPageBitmaps.size, lineScrollPx) {
         if (state.autoTurnState.running && scrollState.maxValue > 0) {
-            val progress = documentScrollProgress(state).coerceIn(0f, 1f)
-            scrollState.animateScrollTo((scrollState.maxValue * progress).toInt())
+            val target = (currentLineIndex * lineScrollPx).coerceIn(0, scrollState.maxValue)
+            scrollState.animateScrollTo(target)
         }
     }
     LaunchedEffect(scrollState.maxValue) {
@@ -525,11 +533,7 @@ private fun ScrollScorePane(
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 .padding(top = 66.dp, bottom = 44.dp)
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, _, zoom, _ ->
-                        onScaleChange((scale * zoom).coerceIn(0.75f, 3f))
-                    }
-                },
+                .clickable(enabled = false) {},
             verticalArrangement = Arrangement.spacedBy(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -569,11 +573,10 @@ private fun pageScrollProgress(state: MainUiState): Float {
     return (currentBeat - previousBeat) / span
 }
 
-private fun documentScrollProgress(state: MainUiState): Float {
-    val currentBeat = state.autoTurnState.elapsedBeats
-    val lastCueBeat = state.cues.mapNotNull { it.triggerBeat }.maxOrNull()
-    val totalBeats = (lastCueBeat ?: (state.pageCount * 32f)).coerceAtLeast(1f)
-    return currentBeat / totalBeats
+private fun autoScrollLineIndex(state: MainUiState): Int {
+    val beatsPerLine = (state.selected?.metadata?.timeSignature ?: 4) * state.barsPerLine
+    if (beatsPerLine <= 0) return 0
+    return (state.autoTurnState.elapsedBeats / beatsPerLine).toInt().coerceAtLeast(0)
 }
 
 @Composable
@@ -714,6 +717,28 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
                 Icon(if (selected.score.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "즐겨찾기")
             }
         }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("한 줄", fontWeight = FontWeight.SemiBold)
+            IconButton(onClick = { viewModel.setBarsPerLine(state.barsPerLine - 1) }) {
+                Icon(Icons.Default.Remove, contentDescription = "한 줄 마디 수 줄이기")
+            }
+            Text("${state.barsPerLine}마디", modifier = Modifier.width(54.dp), fontWeight = FontWeight.SemiBold)
+            IconButton(onClick = { viewModel.setBarsPerLine(state.barsPerLine + 1) }) {
+                Icon(Icons.Default.Add, contentDescription = "한 줄 마디 수 늘리기")
+            }
+            Column(Modifier.weight(1f)) {
+                Text("줄 이동 ${state.lineScrollDp}dp", style = MaterialTheme.typography.bodySmall)
+                Slider(
+                    value = state.lineScrollDp.toFloat(),
+                    onValueChange = { viewModel.setLineScrollDp(it.toInt()) },
+                    valueRange = 60f..520f
+                )
+            }
+        }
+        Text(
+            "스크롤 모드: ${metadata.timeSignature}/4 기준 ${state.barsPerLine}마디마다 ${state.lineScrollDp}dp 이동",
+            style = MaterialTheme.typography.bodySmall
+        )
         if (state.cues.isNotEmpty()) {
             Text(
                 "큐 ${state.cues.size}개 · ${state.cues.take(4).joinToString("  ") { cue -> "${cue.triggerBeat?.let { "%.1f".format(it) } ?: ((cue.triggerMillis ?: 0) / 1000).toString()}→P${cue.pageIndex + 1}" }}",
