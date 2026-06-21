@@ -152,10 +152,19 @@ data class MainUiState(
     val toolbarExpanded: Boolean = false,
     val progressMode: ProgressMode = ProgressMode.PageTurn,
     val barsPerLine: Int = 4,
-    val lineScrollDp: Int = 180
+    val linesPerPage: Int = 5,
+    val lineScrollDp: Int = 180,
+    val generatedScrollCues: List<ScrollCue> = emptyList()
 )
 
 enum class ProgressMode { PageTurn, Scroll }
+
+data class ScrollCue(
+    val lineIndex: Int,
+    val pageIndex: Int,
+    val triggerBeat: Float,
+    val scrollDp: Int
+)
 
 class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     private val _uiState = MutableStateFlow(MainUiState())
@@ -287,7 +296,23 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     fun toggleToolbarExpanded() = _uiState.run { value = value.copy(toolbarExpanded = !value.toolbarExpanded) }
     fun setProgressMode(mode: ProgressMode) = _uiState.run { value = value.copy(progressMode = mode) }
     fun setBarsPerLine(bars: Int) = _uiState.run { value = value.copy(barsPerLine = bars.coerceIn(1, 8)) }
+    fun setLinesPerPage(lines: Int) = _uiState.run { value = value.copy(linesPerPage = lines.coerceIn(1, 12)) }
     fun setLineScrollDp(dp: Int) = _uiState.run { value = value.copy(lineScrollDp = dp.coerceIn(60, 520)) }
+    fun generateScrollCues() {
+        val state = _uiState.value
+        val selected = state.selected ?: return
+        val totalLines = (state.pageCount * state.linesPerPage).coerceAtLeast(1)
+        val beatsPerLine = (selected.metadata.timeSignature * state.barsPerLine).coerceAtLeast(1)
+        val cues = (0 until totalLines).map { line ->
+            ScrollCue(
+                lineIndex = line,
+                pageIndex = (line / state.linesPerPage).coerceIn(0, (state.pageCount - 1).coerceAtLeast(0)),
+                triggerBeat = (line * beatsPerLine).toFloat(),
+                scrollDp = line * state.lineScrollDp
+            )
+        }
+        _uiState.value = state.copy(generatedScrollCues = cues, progressMode = ProgressMode.Scroll)
+    }
     fun goToPageFromScroll(page: Int) {
         val state = _uiState.value
         val next = page.coerceIn(0, (state.pageCount - 1).coerceAtLeast(0))
@@ -522,8 +547,12 @@ private fun ScrollScorePane(
         snapshotFlow { scrollState.value }.collect { value ->
             if (scrollState.maxValue > 0 && state.pageCount > 0) {
                 val page = ((value.toFloat() / scrollState.maxValue) * state.pageCount).toInt()
+                val linePage = (value / state.lineScrollDp.coerceAtLeast(1))
+                    .coerceAtLeast(0) / state.linesPerPage.coerceAtLeast(1)
+                val resolvedPage = if (state.generatedScrollCues.isNotEmpty()) linePage else page
+                val currentPage = resolvedPage
                     .coerceIn(0, (state.pageCount - 1).coerceAtLeast(0))
-                if (page != state.pageIndex) viewModel.goToPageFromScroll(page)
+                if (currentPage != state.pageIndex) viewModel.goToPageFromScroll(currentPage)
             }
         }
     }
@@ -574,6 +603,12 @@ private fun pageScrollProgress(state: MainUiState): Float {
 }
 
 private fun autoScrollLineIndex(state: MainUiState): Int {
+    if (state.generatedScrollCues.isNotEmpty()) {
+        return state.generatedScrollCues
+            .lastOrNull { cue -> state.autoTurnState.elapsedBeats >= cue.triggerBeat }
+            ?.lineIndex
+            ?: 0
+    }
     val beatsPerLine = (state.selected?.metadata?.timeSignature ?: 4) * state.barsPerLine
     if (beatsPerLine <= 0) return 0
     return (state.autoTurnState.elapsedBeats / beatsPerLine).toInt().coerceAtLeast(0)
@@ -735,10 +770,29 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
                 )
             }
         }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("페이지", fontWeight = FontWeight.SemiBold)
+            IconButton(onClick = { viewModel.setLinesPerPage(state.linesPerPage - 1) }) {
+                Icon(Icons.Default.Remove, contentDescription = "페이지당 줄 수 줄이기")
+            }
+            Text("${state.linesPerPage}줄", modifier = Modifier.width(42.dp), fontWeight = FontWeight.SemiBold)
+            IconButton(onClick = { viewModel.setLinesPerPage(state.linesPerPage + 1) }) {
+                Icon(Icons.Default.Add, contentDescription = "페이지당 줄 수 늘리기")
+            }
+            Button(onClick = viewModel::generateScrollCues) {
+                Text("스크롤 큐 생성")
+            }
+        }
         Text(
-            "스크롤 모드: ${metadata.timeSignature}/4 기준 ${state.barsPerLine}마디마다 ${state.lineScrollDp}dp 이동",
+            "스크롤 모드: ${metadata.timeSignature}/4 기준 ${state.barsPerLine}마디마다 ${state.lineScrollDp}dp 이동 · 페이지당 ${state.linesPerPage}줄",
             style = MaterialTheme.typography.bodySmall
         )
+        if (state.generatedScrollCues.isNotEmpty()) {
+            val preview = state.generatedScrollCues.take(6).joinToString("  ") { cue ->
+                "B${cue.triggerBeat.toInt()}→P${cue.pageIndex + 1}L${cue.lineIndex + 1}"
+            }
+            Text("생성 큐 ${state.generatedScrollCues.size}개 · $preview", style = MaterialTheme.typography.bodySmall)
+        }
         if (state.cues.isNotEmpty()) {
             Text(
                 "큐 ${state.cues.size}개 · ${state.cues.take(4).joinToString("  ") { cue -> "${cue.triggerBeat?.let { "%.1f".format(it) } ?: ((cue.triggerMillis ?: 0) / 1000).toString()}→P${cue.pageIndex + 1}" }}",
