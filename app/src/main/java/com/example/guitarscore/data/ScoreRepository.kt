@@ -10,6 +10,7 @@ class ScoreRepository(private val dao: ScoreDao) {
     fun observeScores(): Flow<List<ScoreEntity>> = dao.observeScores()
     fun observeFolders(): Flow<List<FolderEntity>> = dao.observeFolders()
     fun observeCues(scoreId: Long): Flow<List<TurnCueEntity>> = dao.observeCues(scoreId)
+    fun observeScoreChords(scoreId: Long): Flow<List<ScoreChordEntity>> = dao.observeScoreChords(scoreId)
 
     suspend fun addPdf(contentResolver: ContentResolver, uri: Uri, folderId: Long? = null): Long {
         contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -39,4 +40,6 @@ class ScoreRepository(private val dao: ScoreDao) {
     suspend fun saveMetadata(metadata: ScoreMetadataEntity) = dao.upsertMetadata(metadata)
     suspend fun addCue(cue: TurnCueEntity) = dao.insertCue(cue)
     suspend fun deleteCue(cueId: Long) = dao.deleteCue(cueId)
+    suspend fun addScoreChord(chord: ScoreChordEntity) = dao.upsertScoreChord(chord)
+    suspend fun deleteScoreChord(scoreId: Long, chordName: String) = dao.deleteScoreChord(scoreId, chordName)
 }

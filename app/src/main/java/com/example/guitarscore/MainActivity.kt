@@ -34,9 +34,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
@@ -99,6 +101,7 @@ import com.example.guitarscore.audio.TunerEngine
 import com.example.guitarscore.audio.builtInTunings
 import com.example.guitarscore.data.ScoreEntity
 import com.example.guitarscore.data.FolderEntity
+import com.example.guitarscore.data.ScoreChordEntity
 import com.example.guitarscore.data.ScoreMetadataEntity
 import com.example.guitarscore.data.ScoreRepository
 import com.example.guitarscore.data.ScoreWithMetadata
@@ -106,6 +109,7 @@ import com.example.guitarscore.data.TurnCueEntity
 import com.example.guitarscore.score.PdfPageRenderer
 import com.example.guitarscore.score.renderPdfThumbnail
 import com.example.guitarscore.chord.ChordTrainerScreen
+import com.example.guitarscore.chord.ScoreChordHelperSidebar
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -152,6 +156,7 @@ data class MainUiState(
     val searchQuery: String = "",
     val selected: ScoreWithMetadata? = null,
     val cues: List<TurnCueEntity> = emptyList(),
+    val scoreChords: List<ScoreChordEntity> = emptyList(),
     val pageIndex: Int = 0,
     val pageCount: Int = 0,
     val pageBitmap: android.graphics.Bitmap? = null,
@@ -159,6 +164,7 @@ data class MainUiState(
     val autoTurnState: AutoTurnState = AutoTurnState(),
     val metronomeRunning: Boolean = false,
     val tunerVisible: Boolean = false,
+    val chordHelperVisible: Boolean = false,
     val toolbarExpanded: Boolean = false,
     val progressMode: ProgressMode = ProgressMode.PageTurn,
     val barsPerLine: Int = 4,
@@ -184,6 +190,7 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     private val autoTurn = AutoTurnEngine()
     private val metronome = MetronomeEngine()
     private var cueJob: Job? = null
+    private var scoreChordJob: Job? = null
     private var pdfRenderer: PdfPageRenderer? = null
     private val thumbnailJobs = mutableSetOf<Long>()
 
@@ -287,6 +294,7 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
             autoTurn.stop()
             metronome.stop()
             cueJob?.cancel()
+            scoreChordJob?.cancel()
             pdfRenderer?.close()
             val selected = repository.loadScore(id) ?: return@launch
             val renderer = PdfPageRenderer(context.applicationContext, Uri.parse(selected.score.pdfUri))
@@ -300,11 +308,18 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
                 pageCount = pageCount,
                 scrollPageBitmaps = emptyMap(),
                 generatedScrollCues = emptyList(),
+                scoreChords = emptyList(),
+                chordHelperVisible = false,
                 metronomeRunning = false,
                 autoTurnState = AutoTurnState()
             )
             cueJob = viewModelScope.launch {
                 repository.observeCues(id).collect { cues -> _uiState.value = _uiState.value.copy(cues = cues) }
+            }
+            scoreChordJob = viewModelScope.launch {
+                repository.observeScoreChords(id).collect { chords ->
+                    _uiState.value = _uiState.value.copy(scoreChords = chords)
+                }
             }
             renderCurrentPage()
         }
@@ -313,6 +328,8 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     fun closeScore() {
         autoTurn.stop()
         metronome.stop()
+        cueJob?.cancel()
+        scoreChordJob?.cancel()
         pdfRenderer?.close()
         pdfRenderer = null
         val state = _uiState.value
@@ -396,6 +413,15 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
 
     fun nudge(deltaMillis: Long) = autoTurn.nudge(deltaMillis)
     fun toggleTuner() = _uiState.run { value = value.copy(tunerVisible = !value.tunerVisible) }
+    fun toggleChordHelper() = _uiState.run { value = value.copy(chordHelperVisible = !value.chordHelperVisible) }
+    fun addScoreChord(chordName: String) {
+        val scoreId = _uiState.value.selected?.score?.id ?: return
+        viewModelScope.launch { repository.addScoreChord(ScoreChordEntity(scoreId, chordName)) }
+    }
+    fun removeScoreChord(chordName: String) {
+        val scoreId = _uiState.value.selected?.score?.id ?: return
+        viewModelScope.launch { repository.deleteScoreChord(scoreId, chordName) }
+    }
     fun toggleToolbarExpanded() = _uiState.run { value = value.copy(toolbarExpanded = !value.toolbarExpanded) }
     fun setProgressMode(mode: ProgressMode) = _uiState.run { value = value.copy(progressMode = mode) }
     fun setBarsPerLine(bars: Int) = _uiState.run { value = value.copy(barsPerLine = bars.coerceIn(1, 8)) }
@@ -514,6 +540,33 @@ private fun ViewerScreen(state: MainUiState, viewModel: MainViewModel) {
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 10.dp)
         )
+        if (state.chordHelperVisible) {
+            ScoreChordHelperSidebar(
+                savedChordNames = state.scoreChords.map { it.chordName },
+                onDismiss = viewModel::toggleChordHelper,
+                onAdd = viewModel::addScoreChord,
+                onRemove = viewModel::removeScoreChord,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .width(390.dp)
+                    .fillMaxHeight()
+            )
+        } else {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .width(34.dp)
+                    .height(64.dp)
+                    .clickable(onClick = viewModel::toggleChordHelper),
+                color = Color(0xEFFFFFFF),
+                contentColor = Color(0xFF202532),
+                shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "코드 도우미 열기")
+                }
+            }
+        }
         if (state.tunerVisible) {
             TunerOverlay(onDismiss = viewModel::toggleTuner)
         }

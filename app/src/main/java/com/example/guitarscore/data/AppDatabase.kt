@@ -8,8 +8,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [ScoreEntity::class, FolderEntity::class, ScoreMetadataEntity::class, TurnCueEntity::class],
-    version = 2,
+    entities = [
+        ScoreEntity::class,
+        FolderEntity::class,
+        ScoreMetadataEntity::class,
+        TurnCueEntity::class,
+        ScoreChordEntity::class
+    ],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -33,10 +39,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val migration2To3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS score_chords (
+                        scoreId INTEGER NOT NULL,
+                        chordName TEXT NOT NULL,
+                        addedAt INTEGER NOT NULL,
+                        PRIMARY KEY(scoreId, chordName),
+                        FOREIGN KEY(scoreId) REFERENCES scores(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_score_chords_scoreId ON score_chords(scoreId)")
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context,
             AppDatabase::class.java,
             "guitar-score.db"
-        ).addMigrations(migration1To2).build()
+        ).addMigrations(migration1To2, migration2To3).build()
     }
 }

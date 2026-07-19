@@ -46,6 +46,22 @@ class ChordTheoryTest {
 
         assertEquals("오픈 포지션", voicings.first().label)
         assertEquals(listOf(-1, 3, 2, 0, 1, 0), voicings.first().frets)
+        assertEquals(listOf(0, 3, 2, 0, 1, 0), voicings.first().fingers)
+    }
+
+    @Test
+    fun marksFullBarreForFMajor() {
+        val voicing = generateVoicings(requireNotNull(chordDefinition("F"))).first()
+
+        assertEquals(ChordBarre(fret = 1, startString = 0, endString = 5), voicing.barres.first())
+    }
+
+    @Test
+    fun filtersChordGridByQueryAndFamily() {
+        val results = filterChordDefinitions(query = "7", family = "A")
+
+        assertTrue(results.isNotEmpty())
+        assertTrue(results.all { it.name.startsWith("A") && "7" in it.name })
     }
 
     @Test

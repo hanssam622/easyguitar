@@ -10,6 +10,13 @@ data class ChordMatch(
     val pitchClasses: Set<Int>
 )
 
+data class ChordBarre(
+    val fret: Int,
+    val startString: Int,
+    val endString: Int,
+    val finger: Int = 1
+)
+
 data class ChordDefinition(
     val name: String,
     val rootPitchClass: Int,
@@ -26,7 +33,9 @@ enum class VoicingDifficulty(val label: String) {
 data class ChordVoicing(
     val frets: List<Int>,
     val difficulty: VoicingDifficulty,
-    val label: String
+    val label: String,
+    val fingers: List<Int>,
+    val barres: List<ChordBarre>
 )
 
 private data class ChordQuality(val id: String, val suffix: String, val intervals: Set<Int>)
@@ -49,6 +58,21 @@ private val qualities = listOf(
 private val noteNames = listOf("C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
 private val openStringPitchClasses = listOf(4, 9, 2, 7, 11, 4)
 private val openStringMidis = listOf(40, 45, 50, 55, 59, 64)
+private val chordDefinitions: List<ChordDefinition> = buildList {
+    for (root in 0..11) {
+        qualities.forEach { quality ->
+            add(
+                ChordDefinition(
+                    name = noteNames[root] + quality.suffix,
+                    rootPitchClass = root,
+                    qualityId = quality.id,
+                    pitchClasses = quality.intervals.mapTo(linkedSetOf()) { (root + it) % 12 }
+                )
+            )
+        }
+    }
+}
+private val voicingCache = mutableMapOf<String, List<ChordVoicing>>()
 
 fun noteNameAt(position: FretPosition): String =
     noteNames[(openStringPitchClasses[position.stringIndex] + position.fret) % 12]
@@ -63,21 +87,39 @@ fun detectChords(positions: Set<FretPosition>): List<ChordMatch> {
     }?.let { (openStringPitchClasses[it.stringIndex] + it.fret) % 12 }
 
     return buildList {
-        for (root in 0..11) {
-            for (quality in qualities) {
-                val chordTones = quality.intervals.mapTo(linkedSetOf()) { (root + it) % 12 }
-                if (chordTones == selectedPitchClasses) {
-                    val baseName = noteNames[root] + quality.suffix
-                    val name = if (bassPitchClass != null && bassPitchClass != root) {
-                        "$baseName/${noteNames[bassPitchClass]}"
-                    } else {
-                        baseName
-                    }
-                    add(ChordMatch(name, root, chordTones))
-                }
+        chordDefinitions.forEach { chord ->
+            if (chord.pitchClasses == selectedPitchClasses) {
+                add(chord.toMatch(bassPitchClass))
             }
         }
     }.sortedWith(compareBy<ChordMatch> { it.rootPitchClass != bassPitchClass }.thenBy { it.name.length })
+}
+
+fun suggestChords(positions: Set<FretPosition>, limit: Int = 5): List<ChordMatch> {
+    if (positions.isEmpty()) return emptyList()
+    val selectedPitchClasses = positions.mapTo(linkedSetOf()) {
+        (openStringPitchClasses[it.stringIndex] + it.fret) % 12
+    }
+    if (selectedPitchClasses.size < 2) return emptyList()
+    val bassPitchClass = positions.minByOrNull {
+        openStringMidis[it.stringIndex] + it.fret
+    }?.let { (openStringPitchClasses[it.stringIndex] + it.fret) % 12 }
+
+    return chordDefinitions
+        .map { chord ->
+            val missing = chord.pitchClasses.count { it !in selectedPitchClasses }
+            val extra = selectedPitchClasses.count { it !in chord.pitchClasses }
+            Triple(chord, missing, extra)
+        }
+        .filter { (_, missing, extra) -> missing <= 1 && extra <= 1 }
+        .sortedWith(
+            compareBy<Triple<ChordDefinition, Int, Int>> { it.second * 3 + it.third * 4 }
+                .thenBy { it.first.rootPitchClass != bassPitchClass }
+                .thenBy { it.first.name.length }
+        )
+        .map { (chord, _, _) -> chord.toMatch(bassPitchClass) }
+        .distinctBy { it.name }
+        .take(limit)
 }
 
 fun selectedNoteSummary(positions: Set<FretPosition>): String = positions
@@ -86,9 +128,9 @@ fun selectedNoteSummary(positions: Set<FretPosition>): String = positions
     .sortedBy { noteNames.indexOf(it) }
     .joinToString(" · ")
 
-fun searchChordDefinitions(query: String, limit: Int = 24): List<ChordDefinition> {
+fun searchChordDefinitions(query: String, limit: Int = Int.MAX_VALUE): List<ChordDefinition> {
     val normalizedQuery = normalizeChordName(query)
-    return allChordDefinitions()
+    return chordDefinitions
         .filter { normalizedQuery.isBlank() || normalizeChordName(it.name).contains(normalizedQuery) }
         .sortedWith(
             compareBy<ChordDefinition> { !normalizeChordName(it.name).startsWith(normalizedQuery) }
@@ -100,15 +142,26 @@ fun searchChordDefinitions(query: String, limit: Int = 24): List<ChordDefinition
 
 fun chordDefinition(name: String): ChordDefinition? {
     val normalized = normalizeChordName(name)
-    return allChordDefinitions().firstOrNull { normalizeChordName(it.name) == normalized }
+    return chordDefinitions.firstOrNull { normalizeChordName(it.name) == normalized }
 }
 
 fun defaultChordDefinition(): ChordDefinition = requireNotNull(chordDefinition("C"))
 
-fun generateVoicings(chord: ChordDefinition): List<ChordVoicing> {
+fun allChordDefinitions(): List<ChordDefinition> = chordDefinitions
+
+fun filterChordDefinitions(query: String, family: String?): List<ChordDefinition> {
+    val searched = searchChordDefinitions(query)
+    if (family.isNullOrBlank()) return searched
+    return searched.filter { noteNames[it.rootPitchClass] == family }
+}
+
+fun generateVoicings(chord: ChordDefinition): List<ChordVoicing> =
+    voicingCache.getOrPut(chord.name) { buildVoicings(chord) }
+
+private fun buildVoicings(chord: ChordDefinition): List<ChordVoicing> {
     val candidates = linkedMapOf<List<Int>, ChordVoicing>()
     openVoicings[chord.name]?.let { frets ->
-        candidates[frets] = ChordVoicing(frets, difficultyFor(frets), "오픈 포지션")
+        candidates[frets] = createVoicing(chord.name, frets, "오픈 포지션")
     }
 
     barreShapes[chord.qualityId]?.let { shapes ->
@@ -118,11 +171,7 @@ fun generateVoicings(chord: ChordDefinition): List<ChordVoicing> {
             val frets = shape.map { if (it < 0) -1 else it + rootFret }
             candidates.putIfAbsent(
                 frets,
-                ChordVoicing(
-                    frets = frets,
-                    difficulty = difficultyFor(frets),
-                    label = if (index == 0) "6번 줄 루트" else "5번 줄 루트"
-                )
+                createVoicing(chord.name, frets, if (index == 0) "6번 줄 루트" else "5번 줄 루트")
             )
         }
     }
@@ -130,32 +179,76 @@ fun generateVoicings(chord: ChordDefinition): List<ChordVoicing> {
     compactVoicings(chord).forEachIndexed { index, frets ->
         candidates.putIfAbsent(
             frets,
-            ChordVoicing(frets, difficultyFor(frets), if (index == 0) "컴팩트 보이싱" else "하이 포지션")
+            createVoicing(chord.name, frets, if (index == 0) "컴팩트 보이싱" else "하이 포지션")
         )
     }
 
     return candidates.values
         .sortedWith(
             compareBy<ChordVoicing> { it.difficulty.ordinal }
-                .thenBy { it.label != "오픈 포지션" }
+                .thenBy {
+                    when (it.label) {
+                        "오픈 포지션" -> 0
+                        "5번 줄 루트" -> 1
+                        "6번 줄 루트" -> 2
+                        "컴팩트 보이싱" -> 3
+                        else -> 4
+                    }
+                }
                 .thenBy { voicingScore(it.frets) }
         )
         .take(6)
 }
 
-private fun allChordDefinitions(): List<ChordDefinition> = buildList {
-    for (root in 0..11) {
-        qualities.forEach { quality ->
-            add(
-                ChordDefinition(
-                    name = noteNames[root] + quality.suffix,
-                    rootPitchClass = root,
-                    qualityId = quality.id,
-                    pitchClasses = quality.intervals.mapTo(linkedSetOf()) { (root + it) % 12 }
-                )
-            )
+private fun ChordDefinition.toMatch(bassPitchClass: Int?): ChordMatch {
+    val displayName = if (bassPitchClass != null && bassPitchClass != rootPitchClass) {
+        "$name/${noteNames[bassPitchClass]}"
+    } else {
+        name
+    }
+    return ChordMatch(displayName, rootPitchClass, pitchClasses)
+}
+
+private fun createVoicing(chordName: String, frets: List<Int>, label: String): ChordVoicing {
+    val barres = detectBarres(chordName, frets, label)
+    return ChordVoicing(
+        frets = frets,
+        difficulty = difficultyFor(frets),
+        label = label,
+        fingers = assignFingers(frets, barres),
+        barres = barres
+    )
+}
+
+private fun detectBarres(chordName: String, frets: List<Int>, label: String): List<ChordBarre> {
+    if (label == "오픈 포지션" && chordName !in setOf("F", "Fm")) return emptyList()
+    val positive = frets.withIndex().filter { it.value > 0 }
+    val minimumFret = positive.minOfOrNull { it.value } ?: return emptyList()
+    val minimumStrings = positive.filter { it.value == minimumFret }.map { it.index }
+    if (minimumStrings.size < 2) return emptyList()
+    val start = minimumStrings.min()
+    val end = minimumStrings.max()
+    if ((start..end).any { frets[it] < minimumFret }) return emptyList()
+    return listOf(ChordBarre(minimumFret, start, end))
+}
+
+private fun assignFingers(frets: List<Int>, barres: List<ChordBarre>): List<Int> {
+    val result = MutableList(6) { 0 }
+    val barre = barres.firstOrNull()
+    barre?.let { value ->
+        (value.startString..value.endString).forEach { string ->
+            if (frets[string] == value.fret) result[string] = value.finger
         }
     }
+    var nextFinger = if (barre == null) 1 else 2
+    frets.withIndex()
+        .filter { it.value > 0 && result[it.index] == 0 }
+        .sortedWith(compareBy<IndexedValue<Int>> { it.value }.thenBy { it.index })
+        .forEach { item ->
+            result[item.index] = nextFinger.coerceAtMost(4)
+            nextFinger = (nextFinger + 1).coerceAtMost(4)
+        }
+    return result
 }
 
 private fun normalizeChordName(value: String): String = value

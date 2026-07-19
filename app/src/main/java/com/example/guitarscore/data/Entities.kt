@@ -63,6 +63,23 @@ data class TurnCueEntity(
     val triggerMillis: Long?
 )
 
+@Entity(
+    tableName = "score_chords",
+    primaryKeys = ["scoreId", "chordName"],
+    indices = [Index("scoreId")],
+    foreignKeys = [ForeignKey(
+        entity = ScoreEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["scoreId"],
+        onDelete = ForeignKey.CASCADE
+    )]
+)
+data class ScoreChordEntity(
+    val scoreId: Long,
+    val chordName: String,
+    val addedAt: Long = System.currentTimeMillis()
+)
+
 data class ScoreWithMetadata(
     val score: ScoreEntity,
     val metadata: ScoreMetadataEntity

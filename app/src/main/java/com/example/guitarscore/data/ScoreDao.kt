@@ -25,6 +25,9 @@ interface ScoreDao {
     @Query("SELECT * FROM turn_cues WHERE scoreId = :scoreId ORDER BY COALESCE(triggerBeat, triggerMillis / 1000.0), pageIndex")
     fun observeCues(scoreId: Long): Flow<List<TurnCueEntity>>
 
+    @Query("SELECT * FROM score_chords WHERE scoreId = :scoreId ORDER BY addedAt")
+    fun observeScoreChords(scoreId: Long): Flow<List<ScoreChordEntity>>
+
     @Insert
     suspend fun insertScore(score: ScoreEntity): Long
 
@@ -36,6 +39,9 @@ interface ScoreDao {
 
     @Insert
     suspend fun insertCue(cue: TurnCueEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertScoreChord(chord: ScoreChordEntity)
 
     @Update
     suspend fun updateScore(score: ScoreEntity)
@@ -51,6 +57,9 @@ interface ScoreDao {
 
     @Query("DELETE FROM turn_cues WHERE id = :cueId")
     suspend fun deleteCue(cueId: Long)
+
+    @Query("DELETE FROM score_chords WHERE scoreId = :scoreId AND chordName = :chordName")
+    suspend fun deleteScoreChord(scoreId: Long, chordName: String)
 
     @Transaction
     suspend fun addScore(score: ScoreEntity): Long {
