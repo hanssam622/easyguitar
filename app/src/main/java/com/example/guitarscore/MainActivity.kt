@@ -929,7 +929,7 @@ private fun TransportBar(state: MainUiState, viewModel: MainViewModel) {
 }
 
 @Composable
-private fun TunerOverlay(onDismiss: () -> Unit) {
+fun TunerOverlay(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val engine = remember { TunerEngine(context.applicationContext) }
     var selectedPreset by remember { mutableStateOf(builtInTunings.first()) }

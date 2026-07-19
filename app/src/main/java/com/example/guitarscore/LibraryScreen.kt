@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -144,6 +146,7 @@ fun LibraryScreen(state: MainUiState, viewModel: MainViewModel) {
                 onAddFolder = { addFolderVisible = true },
                 onRenameFolder = { folderToRename = it },
                 onChords = viewModel::showChordTrainer,
+                onTuner = viewModel::toggleTuner,
                 onImport = { pdfPicker.launch(arrayOf("application/pdf")) }
             )
             Box(Modifier.fillMaxSize()) {
@@ -209,6 +212,9 @@ fun LibraryScreen(state: MainUiState, viewModel: MainViewModel) {
             }
         )
     }
+    if (state.tunerVisible) {
+        TunerOverlay(onDismiss = viewModel::toggleTuner)
+    }
 }
 
 @Composable
@@ -220,6 +226,7 @@ private fun LibrarySidebar(
     onAddFolder: () -> Unit,
     onRenameFolder: (FolderEntity) -> Unit,
     onChords: () -> Unit,
+    onTuner: () -> Unit,
     onImport: () -> Unit
 ) {
     Surface(
@@ -285,10 +292,23 @@ private fun LibrarySidebar(
                     }
                 }
             }
-            Button(onClick = onImport, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(6.dp)) {
-                Icon(Icons.Default.UploadFile, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("PDF 가져오기")
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = onImport, modifier = Modifier.weight(1f), shape = RoundedCornerShape(6.dp)) {
+                    Icon(Icons.Default.UploadFile, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("PDF 가져오기")
+                }
+                Spacer(Modifier.width(10.dp))
+                Surface(
+                    modifier = Modifier.size(48.dp).clickable(onClick = onTuner),
+                    shape = CircleShape,
+                    color = Color(0xFF3559D9),
+                    contentColor = Color.White
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.Tune, contentDescription = "기타 튜너")
+                    }
+                }
             }
         }
     }
