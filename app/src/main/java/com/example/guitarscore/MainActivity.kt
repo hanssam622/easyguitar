@@ -11,6 +11,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -69,6 +71,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -95,11 +98,14 @@ import com.example.guitarscore.audio.MetronomeEngine
 import com.example.guitarscore.audio.TunerEngine
 import com.example.guitarscore.audio.builtInTunings
 import com.example.guitarscore.data.ScoreEntity
+import com.example.guitarscore.data.FolderEntity
 import com.example.guitarscore.data.ScoreMetadataEntity
 import com.example.guitarscore.data.ScoreRepository
 import com.example.guitarscore.data.ScoreWithMetadata
 import com.example.guitarscore.data.TurnCueEntity
 import com.example.guitarscore.score.PdfPageRenderer
+import com.example.guitarscore.score.renderPdfThumbnail
+import com.example.guitarscore.chord.ChordTrainerScreen
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -121,25 +127,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_UP) {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_SPACE -> {
-                    viewModel.nextPage()
-                    return true
-                }
-                KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    viewModel.previousPage()
-                    return true
-                }
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_SPACE -> {
+                viewModel.nextPage()
+                return true
+            }
+            KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_DPAD_LEFT -> {
+                viewModel.previousPage()
+                return true
             }
         }
-        return super.dispatchKeyEvent(event)
+        return super.onKeyUp(keyCode, event)
     }
 }
 
 data class MainUiState(
     val scores: List<ScoreEntity> = emptyList(),
+    val folders: List<FolderEntity> = emptyList(),
+    val thumbnails: Map<Long, android.graphics.Bitmap> = emptyMap(),
+    val destination: AppDestination = AppDestination.Library,
+    val selectedFolderId: Long? = null,
+    val favoritesOnly: Boolean = false,
+    val searchQuery: String = "",
     val selected: ScoreWithMetadata? = null,
     val cues: List<TurnCueEntity> = emptyList(),
     val pageIndex: Int = 0,
@@ -157,6 +167,8 @@ data class MainUiState(
     val generatedScrollCues: List<ScrollCue> = emptyList()
 )
 
+enum class AppDestination { Library, Chords }
+
 enum class ProgressMode { PageTurn, Scroll }
 
 data class ScrollCue(
@@ -173,6 +185,7 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     private val metronome = MetronomeEngine()
     private var cueJob: Job? = null
     private var pdfRenderer: PdfPageRenderer? = null
+    private val thumbnailJobs = mutableSetOf<Long>()
 
     init {
         viewModelScope.launch {
@@ -180,12 +193,92 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
                 _uiState.value = _uiState.value.copy(scores = scores)
             }
         }
+        viewModelScope.launch {
+            repository.observeFolders().collect { folders ->
+                val selectedFolderId = _uiState.value.selectedFolderId
+                    ?.takeIf { selected -> folders.any { it.id == selected } }
+                _uiState.value = _uiState.value.copy(folders = folders, selectedFolderId = selectedFolderId)
+            }
+        }
     }
 
-    fun importPdf(context: android.content.Context, uri: Uri) {
+    fun importPdf(context: android.content.Context, uri: Uri, folderId: Long? = _uiState.value.selectedFolderId) {
         viewModelScope.launch {
-            val id = repository.addPdf(context.contentResolver, uri)
+            val id = repository.addPdf(context.contentResolver, uri, folderId)
             openScore(context, id)
+        }
+    }
+
+    fun ensureThumbnails(context: android.content.Context) {
+        val state = _uiState.value
+        state.scores.forEach { score ->
+            if (score.id in state.thumbnails || !thumbnailJobs.add(score.id)) return@forEach
+            viewModelScope.launch {
+                val thumbnail = runCatching {
+                    renderPdfThumbnail(context.applicationContext, Uri.parse(score.pdfUri))
+                }.getOrNull()
+                thumbnailJobs.remove(score.id)
+                if (thumbnail != null) {
+                    _uiState.value = _uiState.value.copy(
+                        thumbnails = _uiState.value.thumbnails + (score.id to thumbnail)
+                    )
+                }
+            }
+        }
+    }
+
+    fun selectAllScores() = _uiState.run {
+        value = value.copy(selectedFolderId = null, favoritesOnly = false)
+    }
+
+    fun selectFavorites() = _uiState.run {
+        value = value.copy(selectedFolderId = null, favoritesOnly = true)
+    }
+
+    fun selectFolder(folderId: Long) = _uiState.run {
+        value = value.copy(selectedFolderId = folderId, favoritesOnly = false)
+    }
+
+    fun setSearchQuery(query: String) = _uiState.run { value = value.copy(searchQuery = query) }
+
+    fun showChordTrainer() = _uiState.run { value = value.copy(destination = AppDestination.Chords) }
+    fun showLibrary() = _uiState.run { value = value.copy(destination = AppDestination.Library) }
+
+    fun addFolder(name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch { repository.addFolder(name) }
+    }
+
+    fun renameFolder(folder: FolderEntity, name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            repository.updateFolder(folder.copy(name = name.trim(), updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    fun deleteFolder(folderId: Long) {
+        viewModelScope.launch { repository.deleteFolder(folderId) }
+    }
+
+    fun updateScoreDetails(score: ScoreEntity, title: String, artist: String, folderId: Long?) {
+        if (title.isBlank()) return
+        viewModelScope.launch {
+            repository.updateScore(
+                score.copy(
+                    title = title.trim(),
+                    artist = artist.trim(),
+                    folderId = folderId,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun toggleScoreFavorite(score: ScoreEntity) {
+        viewModelScope.launch {
+            repository.updateScore(
+                score.copy(favorite = !score.favorite, updatedAt = System.currentTimeMillis())
+            )
         }
     }
 
@@ -202,9 +295,11 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
             val pageIndex = selected.score.lastOpenedPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
             _uiState.value = _uiState.value.copy(
                 selected = selected,
+                destination = AppDestination.Library,
                 pageIndex = pageIndex,
                 pageCount = pageCount,
                 scrollPageBitmaps = emptyMap(),
+                generatedScrollCues = emptyList(),
                 metronomeRunning = false,
                 autoTurnState = AutoTurnState()
             )
@@ -220,7 +315,15 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
         metronome.stop()
         pdfRenderer?.close()
         pdfRenderer = null
-        _uiState.value = MainUiState(scores = _uiState.value.scores)
+        val state = _uiState.value
+        _uiState.value = MainUiState(
+            scores = state.scores,
+            folders = state.folders,
+            thumbnails = state.thumbnails,
+            selectedFolderId = state.selectedFolderId,
+            favoritesOnly = state.favoritesOnly,
+            searchQuery = state.searchQuery
+        )
     }
 
     fun nextPage() = movePage(1)
@@ -357,10 +460,21 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
 fun GuitarScoreTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = androidx.compose.material3.lightColorScheme(
-            primary = Color(0xFF2F5D50),
-            secondary = Color(0xFFD49A3A),
-            surface = Color(0xFFFAF8F3),
-            background = Color(0xFFF3F0E8)
+            primary = Color(0xFF3559D9),
+            onPrimary = Color.White,
+            secondary = Color(0xFF008F95),
+            tertiary = Color(0xFFB23A48),
+            surface = Color(0xFFFFFFFF),
+            surfaceVariant = Color(0xFFE8EBF2),
+            surfaceContainerLowest = Color(0xFFFFFFFF),
+            surfaceContainerLow = Color(0xFFF8F9FC),
+            surfaceContainer = Color(0xFFF1F3F8),
+            surfaceContainerHigh = Color(0xFFE9ECF3),
+            surfaceContainerHighest = Color(0xFFE2E6EF),
+            background = Color(0xFFF4F6FA),
+            onSurface = Color(0xFF1B1F2A),
+            onSurfaceVariant = Color(0xFF5E6472),
+            outline = Color(0xFFC5CAD5)
         ),
         content = content
     )
@@ -369,83 +483,12 @@ fun GuitarScoreTheme(content: @Composable () -> Unit) {
 @Composable
 fun GuitarScoreAppUi(viewModel: MainViewModel) {
     val state by viewModel.uiState.collectAsState()
-    if (state.selected == null) {
-        LibraryScreen(state, viewModel)
-    } else {
+    if (state.selected != null) {
         ViewerScreen(state, viewModel)
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LibraryScreen(state: MainUiState, viewModel: MainViewModel) {
-    val context = LocalContext.current
-    val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { viewModel.importPdf(context, it) }
-    }
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text("Guitar Score", fontWeight = FontWeight.SemiBold) },
-                actions = {
-                    IconButton(onClick = { pdfPicker.launch(arrayOf("application/pdf")) }) {
-                        Icon(Icons.Default.Add, contentDescription = "PDF 가져오기")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .padding(padding)
-                .padding(24.dp),
-            horizontalArrangement = Arrangement.spacedBy(24.dp)
-        ) {
-            Column(modifier = Modifier.width(280.dp).fillMaxHeight()) {
-                Icon(Icons.Default.LibraryMusic, contentDescription = null, modifier = Modifier.size(44.dp))
-                Spacer(Modifier.height(16.dp))
-                Text("악보 라이브러리", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("PDF 악보를 가져오고, 태블릿 연주 모드에서 자동 넘김 큐를 기록하세요.")
-                Spacer(Modifier.height(24.dp))
-                Button(onClick = { pdfPicker.launch(arrayOf("application/pdf")) }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("PDF 가져오기")
-                }
-            }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
-                if (state.scores.isEmpty()) {
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                            Text("아직 가져온 악보가 없습니다.", modifier = Modifier.padding(24.dp))
-                        }
-                    }
-                }
-                items(state.scores, key = { it.id }) { score ->
-                    ScoreRow(score = score, onClick = { viewModel.openScore(context, score.id) })
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ScoreRow(score: ScoreEntity, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.MusicNote, contentDescription = null)
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(score.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(if (score.artist.isBlank()) "PDF score" else score.artist, style = MaterialTheme.typography.bodySmall)
-            }
-            Icon(if (score.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = null)
-        }
+    } else if (state.destination == AppDestination.Chords) {
+        ChordTrainerScreen(onBack = viewModel::showLibrary)
+    } else {
+        LibraryScreen(state, viewModel)
     }
 }
 
@@ -889,6 +932,7 @@ private fun TransportBar(state: MainUiState, viewModel: MainViewModel) {
 private fun TunerOverlay(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val engine = remember { TunerEngine(context.applicationContext) }
+    var selectedPreset by remember { mutableStateOf(builtInTunings.first()) }
     val reading by engine.reading.collectAsState()
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) engine.start()
@@ -916,7 +960,7 @@ private fun TunerOverlay(onDismiss: () -> Unit) {
     ) {
         Card(
             modifier = Modifier.width(420.dp).clickable(enabled = false) {},
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFFDFBF7))
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(
                 Modifier.padding(24.dp),
@@ -939,13 +983,22 @@ private fun TunerOverlay(onDismiss: () -> Unit) {
                     },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (reading.inTune) Color(0xFF2F7D4F) else Color(0xFF9A5A12)
+                    color = if (reading.inTune) Color(0xFF16836B) else Color(0xFFB26A00)
                 )
                 Text("${reading.frequency.toInt()} Hz · ${reading.cents} cents · detected ${reading.note}")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     builtInTunings.forEach { preset ->
-                        Surface(color = Color(0xFFECE7DA), shape = MaterialTheme.shapes.small) {
-                            Text(preset.name, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                        val selected = selectedPreset == preset
+                        Surface(
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.clickable {
+                                selectedPreset = preset
+                                engine.setTuning(preset)
+                            }
+                        ) {
+                            Text(preset.name, modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp))
                         }
                     }
                 }
@@ -956,7 +1009,12 @@ private fun TunerOverlay(onDismiss: () -> Unit) {
 
 @Composable
 private fun TunerGauge(cents: Int, inTune: Boolean) {
-    val normalized = (cents.coerceIn(-50, 50) / 50f)
+    val animatedCents by animateFloatAsState(
+        targetValue = cents.coerceIn(-50, 50).toFloat(),
+        animationSpec = tween(durationMillis = 220),
+        label = "tuner needle"
+    )
+    val normalized = animatedCents / 50f
     Canvas(modifier = Modifier.fillMaxWidth().height(170.dp)) {
         val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height * 0.88f)
         val radius = size.minDimension * 0.78f
@@ -965,7 +1023,7 @@ private fun TunerGauge(cents: Int, inTune: Boolean) {
             val inner = radius * if (i == 0) 0.72f else 0.8f
             val outer = radius * 0.95f
             drawLine(
-                color = if (i == 0) Color(0xFF2F7D4F) else Color(0xFF81796A),
+                color = if (i == 0) Color(0xFF16836B) else Color(0xFF757C8A),
                 start = androidx.compose.ui.geometry.Offset(center.x + cos(angle).toFloat() * inner, center.y + sin(angle).toFloat() * inner),
                 end = androidx.compose.ui.geometry.Offset(center.x + cos(angle).toFloat() * outer, center.y + sin(angle).toFloat() * outer),
                 strokeWidth = if (i == 0) 6f else 3f,
@@ -974,7 +1032,7 @@ private fun TunerGauge(cents: Int, inTune: Boolean) {
         }
         val needleAngle = Math.toRadians((270 + normalized * 60).toDouble())
         drawLine(
-            color = if (inTune) Color(0xFF2F7D4F) else Color(0xFFD18B22),
+            color = if (inTune) Color(0xFF16836B) else Color(0xFF3559D9),
             start = center,
             end = androidx.compose.ui.geometry.Offset(
                 center.x + cos(needleAngle).toFloat() * radius * 0.72f,

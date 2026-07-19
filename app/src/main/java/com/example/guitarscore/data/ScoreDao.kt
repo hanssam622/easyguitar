@@ -13,6 +13,9 @@ interface ScoreDao {
     @Query("SELECT * FROM scores ORDER BY favorite DESC, updatedAt DESC")
     fun observeScores(): Flow<List<ScoreEntity>>
 
+    @Query("SELECT * FROM folders ORDER BY name COLLATE NOCASE")
+    fun observeFolders(): Flow<List<FolderEntity>>
+
     @Query("SELECT * FROM scores WHERE id = :id")
     suspend fun getScore(id: Long): ScoreEntity?
 
@@ -25,6 +28,9 @@ interface ScoreDao {
     @Insert
     suspend fun insertScore(score: ScoreEntity): Long
 
+    @Insert
+    suspend fun insertFolder(folder: FolderEntity): Long
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertMetadata(metadata: ScoreMetadataEntity)
 
@@ -34,6 +40,15 @@ interface ScoreDao {
     @Update
     suspend fun updateScore(score: ScoreEntity)
 
+    @Update
+    suspend fun updateFolder(folder: FolderEntity)
+
+    @Query("UPDATE scores SET folderId = NULL, updatedAt = :updatedAt WHERE folderId = :folderId")
+    suspend fun clearFolder(folderId: Long, updatedAt: Long)
+
+    @Query("DELETE FROM folders WHERE id = :folderId")
+    suspend fun deleteFolderRow(folderId: Long)
+
     @Query("DELETE FROM turn_cues WHERE id = :cueId")
     suspend fun deleteCue(cueId: Long)
 
@@ -42,5 +57,11 @@ interface ScoreDao {
         val id = insertScore(score)
         upsertMetadata(ScoreMetadataEntity(scoreId = id))
         return id
+    }
+
+    @Transaction
+    suspend fun deleteFolder(folderId: Long) {
+        clearFolder(folderId, System.currentTimeMillis())
+        deleteFolderRow(folderId)
     }
 }

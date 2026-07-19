@@ -51,3 +51,13 @@ class PdfPageRenderer(private val context: Context, private val uri: Uri) : Auto
         descriptor = null
     }
 }
+
+suspend fun renderPdfThumbnail(context: Context, uri: Uri, targetWidth: Int = 420): Bitmap {
+    val renderer = PdfPageRenderer(context.applicationContext, uri)
+    return try {
+        renderer.open()
+        renderer.renderPage(0, targetWidth).copy(Bitmap.Config.ARGB_8888, false)
+    } finally {
+        renderer.close()
+    }
+}
