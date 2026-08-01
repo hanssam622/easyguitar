@@ -264,6 +264,8 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
                 val thumbnail = thumbnailGate.withPermit {
                     runCatching {
                         renderPdfThumbnail(context.applicationContext, Uri.parse(score.pdfUri))
+                    }.onFailure { error ->
+                        android.util.Log.w(LOG_TAG, "썸네일 렌더 실패: ${score.title}", error)
                     }.getOrNull()
                 }
                 thumbnailJobs.remove(score.id)
@@ -348,7 +350,8 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
             releaseScoreResources()
             val selected = repository.loadScore(id) ?: return@launch
             val renderer = PdfPageRenderer(context.applicationContext, Uri.parse(selected.score.pdfUri))
-            val pageCount = runCatching { renderer.open() }.getOrElse {
+            val pageCount = runCatching { renderer.open() }.getOrElse { error ->
+                android.util.Log.w(LOG_TAG, "PDF 열기 실패: ${selected.score.pdfUri}", error)
                 renderer.close()
                 _uiState.value = _uiState.value.copy(
                     message = "'${selected.score.title}' 을(를) 열 수 없습니다. 파일이 이동되었거나 삭제되었을 수 있습니다."
@@ -612,7 +615,8 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     private suspend fun renderCurrentPage() {
         val renderer = pdfRenderer ?: return
         val bitmap = runCatching { renderer.renderPage(_uiState.value.pageIndex, PAGE_RENDER_WIDTH) }
-            .getOrElse {
+            .getOrElse { error ->
+                android.util.Log.w(LOG_TAG, "페이지 렌더 실패: ${_uiState.value.pageIndex}", error)
                 _uiState.value = _uiState.value.copy(message = "페이지를 그릴 수 없습니다.")
                 return
             }
@@ -623,6 +627,7 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     }
 
     companion object {
+        private const val LOG_TAG = "GuitarScore"
         private const val PAGE_RENDER_WIDTH = 1_400
 
         fun factory(repository: ScoreRepository) = object : ViewModelProvider.Factory {

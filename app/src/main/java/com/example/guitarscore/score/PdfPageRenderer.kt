@@ -50,8 +50,9 @@ class PdfPageRenderer(private val context: Context, private val uri: Uri) : Auto
             pdfRenderer.openPage(pageIndex).use { page ->
                 val width = targetWidth.coerceIn(320, MAX_RENDER_WIDTH)
                 val height = (page.height * (width.toFloat() / page.width)).roundToInt().coerceAtLeast(320)
-                // 악보는 사실상 흑백이라 RGB_565 로도 충분하고 메모리는 절반만 쓴다.
-                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+                // PdfRenderer 는 ARGB_8888 로만 그릴 수 있다. 다른 설정을 주면 렌더가 통째로 실패한다.
+                // 메모리는 캐시 크기와 렌더 폭으로 잡는다.
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                 bitmap.eraseColor(Color.WHITE)
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                 cache[pageIndex] = bitmap
@@ -88,11 +89,16 @@ class PdfPageRenderer(private val context: Context, private val uri: Uri) : Auto
     }
 }
 
+/**
+ * 썸네일은 화면에 오래 남아 있고 악보 수만큼 쌓이므로, 렌더가 끝난 뒤 RGB_565 로 복사해 절반만 들고 있는다.
+ * (렌더 자체는 ARGB_8888 로만 할 수 있다.)
+ */
 suspend fun renderPdfThumbnail(context: Context, uri: Uri, targetWidth: Int = 360): Bitmap {
     val renderer = PdfPageRenderer(context.applicationContext, uri)
     return try {
         renderer.open()
-        renderer.renderPage(0, targetWidth)
+        val rendered = renderer.renderPage(0, targetWidth)
+        rendered.copy(Bitmap.Config.RGB_565, false) ?: rendered
     } finally {
         renderer.close()
     }

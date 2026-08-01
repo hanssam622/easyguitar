@@ -16,7 +16,7 @@ import kotlin.math.min
 
 /**
  * 가로 방향 코드 다이어그램. 왼쪽이 헤드(넥 상단)이고 오른쪽으로 갈수록 프렛이 올라간다.
- * 위에서 아래로 6번 줄(저음 E) → 1번 줄(고음 E) 순서라, 기타를 눕혀 놓고 내려다보는 것과 방향이 같다.
+ * 위에서 아래로 1번 줄(고음 E) → 6번 줄(저음 E) 순서로, 연주 자세에서 기타를 내려다볼 때와 같은 방향이다.
  */
 @Composable
 fun ChordDiagram(voicing: ChordVoicing, modifier: Modifier = Modifier, showStringNames: Boolean = true) {
@@ -40,11 +40,17 @@ fun ChordDiagram(voicing: ChordVoicing, modifier: Modifier = Modifier, showStrin
             textAlign = Paint.Align.CENTER
             typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
         }
+        // 6번 줄(인덱스 0)이 맨 아래. 연주 자세에서 내려다보는 방향과 같게 맞춘 것이다.
+        val yOfString = { string: Int -> top + (5 - string) * stringGap }
 
-        // 줄은 저음현일수록 굵게 그려서 위아래 방향을 헷갈리지 않게 한다.
+        // 줄은 저음현일수록 굵게 그린다.
         for (string in 0..5) {
-            val y = top + string * stringGap
-            drawLine(lineColor, Offset(left, y), Offset(right, y), strokeWidth = (2.4f - string * 0.25f).dp.toPx())
+            drawLine(
+                lineColor,
+                Offset(left, yOfString(string)),
+                Offset(right, yOfString(string)),
+                strokeWidth = (2.4f - string * 0.25f).dp.toPx()
+            )
         }
         for (fret in 0..5) {
             val x = left + fret * fretGap
@@ -65,11 +71,10 @@ fun ChordDiagram(voicing: ChordVoicing, modifier: Modifier = Modifier, showStrin
         if (showStringNames) {
             val stringNames = listOf("6E", "5A", "4D", "3G", "2B", "1E")
             stringNames.forEachIndexed { string, label ->
-                val y = top + string * stringGap
                 drawContext.canvas.nativeCanvas.drawText(
                     label,
                     right + 13.dp.toPx(),
-                    y - (textPaint.ascent() + textPaint.descent()) / 2f,
+                    yOfString(string) - (textPaint.ascent() + textPaint.descent()) / 2f,
                     textPaint
                 )
             }
@@ -84,11 +89,10 @@ fun ChordDiagram(voicing: ChordVoicing, modifier: Modifier = Modifier, showStrin
                 else -> null
             } ?: return@forEachIndexed
             textPaint.color = if (fret < 0) mutedColor.toArgb() else accentColor.toArgb()
-            val y = top + string * stringGap
             drawContext.canvas.nativeCanvas.drawText(
                 marker,
                 left - 13.dp.toPx(),
-                y - (textPaint.ascent() + textPaint.descent()) / 2f,
+                yOfString(string) - (textPaint.ascent() + textPaint.descent()) / 2f,
                 textPaint
             )
         }
@@ -96,12 +100,12 @@ fun ChordDiagram(voicing: ChordVoicing, modifier: Modifier = Modifier, showStrin
         voicing.barres.forEach { barre ->
             if (barre.fret !in startFret until startFret + 5) return@forEach
             val x = left + (barre.fret - startFret + 0.5f) * fretGap
-            val startY = top + barre.startString * stringGap
-            val endY = top + barre.endString * stringGap
+            val topY = minOf(yOfString(barre.startString), yOfString(barre.endString))
+            val bottomY = maxOf(yOfString(barre.startString), yOfString(barre.endString))
             drawRoundRect(
                 color = accentColor,
-                topLeft = Offset(x - dotRadius, startY - dotRadius),
-                size = Size(dotRadius * 2, endY - startY + dotRadius * 2),
+                topLeft = Offset(x - dotRadius, topY - dotRadius),
+                size = Size(dotRadius * 2, bottomY - topY + dotRadius * 2),
                 cornerRadius = CornerRadius(dotRadius, dotRadius)
             )
             textPaint.color = Color.White.toArgb()
@@ -109,7 +113,7 @@ fun ChordDiagram(voicing: ChordVoicing, modifier: Modifier = Modifier, showStrin
             drawContext.canvas.nativeCanvas.drawText(
                 barre.finger.toString(),
                 x,
-                (startY + endY) / 2f - (textPaint.ascent() + textPaint.descent()) / 2f,
+                (topY + bottomY) / 2f - (textPaint.ascent() + textPaint.descent()) / 2f,
                 textPaint
             )
         }
@@ -121,7 +125,7 @@ fun ChordDiagram(voicing: ChordVoicing, modifier: Modifier = Modifier, showStrin
             }
             if (coveredByBarre) return@forEachIndexed
             val x = left + (fret - startFret + 0.5f) * fretGap
-            val y = top + string * stringGap
+            val y = yOfString(string)
             drawCircle(accentColor, dotRadius, Offset(x, y))
             val finger = voicing.fingers.getOrElse(string) { 0 }
             if (finger > 0) {

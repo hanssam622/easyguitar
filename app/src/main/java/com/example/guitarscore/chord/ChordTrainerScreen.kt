@@ -176,7 +176,8 @@ private fun InteractiveFretboard(
     onSelect: (Int, Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val strings = listOf("6  E", "5  A", "4  D", "3  G", "2  B", "1  E")
+    // 다이어그램과 같은 방향으로 1번 줄이 맨 위에 오도록 뒤집어 그린다.
+    val stringRows = listOf(5 to "1  E", 4 to "2  B", 3 to "3  G", 2 to "4  D", 1 to "5  A", 0 to "6  E")
     val primaryColor = MaterialTheme.colorScheme.primary
     val cellWidth = 48.dp
     val cellHeight = 56.dp
@@ -191,7 +192,7 @@ private fun InteractiveFretboard(
                 }
             }
         }
-        strings.forEachIndexed { stringIndex, label ->
+        stringRows.forEach { (stringIndex, label) ->
             val selectedFret = stringFrets[stringIndex]
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(label, modifier = Modifier.width(58.dp), fontWeight = FontWeight.Bold)
