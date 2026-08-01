@@ -11,9 +11,16 @@ import kotlin.math.sin
 class MetronomeEngine {
     private val running = AtomicBoolean(false)
     private var worker: Thread? = null
+    @Volatile private var muted = false
 
-    fun start(bpm: Int, beatsPerBar: Int, onBeat: (Int, Long) -> Unit) {
+    /** 클릭음만 끄고 박자 진행은 유지한다. 자동 넘김은 쓰되 소리는 원치 않는 경우를 위한 것. */
+    fun setMuted(value: Boolean) {
+        muted = value
+    }
+
+    fun start(bpm: Int, beatsPerBar: Int, muted: Boolean = false, onBeat: (Int, Long) -> Unit) {
         stop()
+        this.muted = muted
         running.set(true)
         worker = Thread {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
@@ -26,7 +33,11 @@ class MetronomeEngine {
 
     fun stop() {
         running.set(false)
-        worker?.interrupt()
+        // 이전 AudioTrack 이 완전히 정리되기 전에 새 트랙을 만들면 클릭이 겹쳐 들린다.
+        worker?.let { thread ->
+            runCatching { thread.join(200) }
+            if (thread.isAlive) thread.interrupt()
+        }
         worker = null
     }
 
@@ -74,7 +85,7 @@ class MetronomeEngine {
                         beat++
                     }
                     val click = if ((beat - 1).floorMod(beatsPerBar) == 0) accentClick else regularClick
-                    buffer[i] = if (positionInBeat < click.size) click[positionInBeat] else 0
+                    buffer[i] = if (!muted && positionInBeat < click.size) click[positionInBeat] else 0
                     sampleCursor++
                 }
                 var written = 0

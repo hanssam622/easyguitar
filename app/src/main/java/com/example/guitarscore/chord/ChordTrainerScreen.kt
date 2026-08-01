@@ -109,26 +109,48 @@ private fun ChordBuilderScreen(modifier: Modifier = Modifier) {
             fret.takeIf { it >= 0 }?.let { FretPosition(string, it) }
         }
     }
-    val exactMatches = remember(positions) { detectChords(positions) }
-    val suggestions = remember(positions, exactMatches) {
-        if (exactMatches.isEmpty()) suggestChords(positions) else emptyList()
-    }
+    val interpretations = remember(positions) { analyzeChords(positions) }
+    val best = interpretations.firstOrNull()
+    val alternatives = interpretations.drop(1).take(3)
     Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(6.dp)) {
         Column(Modifier.fillMaxSize().padding(22.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("현재 코드", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        exactMatches.firstOrNull()?.name ?: "--",
+                        best?.name ?: "--",
                         style = MaterialTheme.typography.displayMedium,
                         fontWeight = FontWeight.Bold,
-                        color = if (exactMatches.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        color = when {
+                            best == null -> MaterialTheme.colorScheme.onSurface
+                            best.exact -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.secondary
+                        }
                     )
-                    when {
-                        exactMatches.size > 1 -> Text("다른 해석  ${exactMatches.drop(1).take(3).joinToString(" · ") { it.name }}")
-                        suggestions.isNotEmpty() -> Text("가능성  ${suggestions.joinToString(" · ") { it.name }}", color = MaterialTheme.colorScheme.secondary)
-                        positions.isNotEmpty() -> Text(selectedNoteSummary(positions), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // 정확히 맞아떨어지지 않을 때 왜 그런지(빠진 음/추가된 음) 보여 준다.
+                    if (best != null && !best.exact) {
+                        val reason = buildList {
+                            if (best.missingNotes.isNotEmpty()) add("${best.missingNotes.joinToString(", ")} 없음")
+                            if (best.extraNotes.isNotEmpty()) add("${best.extraNotes.joinToString(", ")} 추가됨")
+                        }.joinToString(" · ")
+                        Text("비슷한 코드 · $reason", color = MaterialTheme.colorScheme.secondary)
                     }
+                    if (alternatives.isNotEmpty()) {
+                        Text("다른 해석  ${alternatives.joinToString(" · ") { it.name }}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (positions.isNotEmpty()) {
+                        Text(
+                            "누른 음  ${selectedNoteSummary(positions)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (best != null) {
+                    val voicing = remember(best.name) {
+                        chordDefinition(best.name.substringBefore("/"))?.let { generateVoicings(it).firstOrNull() }
+                    }
+                    voicing?.let { ChordDiagram(it, Modifier.width(230.dp).height(120.dp), showStringNames = false) }
                 }
                 IconButton(onClick = { stringFrets = List(6) { -1 } }, enabled = positions.isNotEmpty()) {
                     Icon(Icons.AutoMirrored.Filled.Backspace, contentDescription = "운지 초기화")
@@ -318,7 +340,7 @@ private fun ChordThumbnailCard(
             }
             if (voicing != null) {
                 Text(voicing.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                ChordDiagram(voicing, Modifier.fillMaxWidth().aspectRatio(0.86f))
+                ChordDiagram(voicing, Modifier.fillMaxWidth().aspectRatio(1.5f), showStringNames = false)
             }
         }
     }
@@ -329,7 +351,7 @@ private fun ChordDetailDialog(chord: ChordDefinition, onDismiss: () -> Unit) {
     val voicings = remember(chord) { generateVoicings(chord) }
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            modifier = Modifier.width(460.dp).height(590.dp),
+            modifier = Modifier.width(560.dp).height(460.dp),
             shape = RoundedCornerShape(8.dp),
             color = MaterialTheme.colorScheme.surface
         ) {

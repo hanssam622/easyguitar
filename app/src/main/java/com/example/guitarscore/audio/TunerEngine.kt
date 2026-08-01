@@ -11,6 +11,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -27,7 +29,8 @@ data class TunerReading(
     val targetNote: String = "--",
     val cents: Int = 0,
     val inTune: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val permissionRequired: Boolean = false
 )
 
 data class TuningPreset(val name: String, val notes: List<String>)
@@ -35,15 +38,18 @@ data class TuningPreset(val name: String, val notes: List<String>)
 val builtInTunings = listOf(
     TuningPreset("Standard", listOf("E2", "A2", "D3", "G3", "B3", "E4")),
     TuningPreset("Drop D", listOf("D2", "A2", "D3", "G3", "B3", "E4")),
-    TuningPreset("Eb Standard", listOf("Eb2", "Ab2", "Db3", "Gb3", "Bb3", "Eb4"))
+    TuningPreset("Eb Standard", listOf("Eb2", "Ab2", "Db3", "Gb3", "Bb3", "Eb4")),
+    TuningPreset("Open G", listOf("D2", "G2", "D3", "G3", "B3", "D4")),
+    TuningPreset("DADGAD", listOf("D2", "A2", "D3", "G3", "A3", "D4"))
 )
 
 class TunerEngine(private val context: Context) {
-    private val scope = CoroutineScope(Dispatchers.Default)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val _reading = MutableStateFlow(TunerReading())
     val reading: StateFlow<TunerReading> = _reading
     private var job: Job? = null
     private var recorder: AudioRecord? = null
+    @Volatile private var running = false
     @Volatile private var targetMidis = presetToMidis(builtInTunings.first())
     private var smoothedFrequency: Float? = null
     private var pendingFrequency: Float? = null
@@ -59,7 +65,13 @@ class TunerEngine(private val context: Context) {
     }
 
     fun start() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            _reading.value = TunerReading(
+                error = "마이크 권한이 필요합니다.",
+                permissionRequired = true
+            )
+            return
+        }
         stop()
         val sampleRate = 44_100
         val minBufferSize = AudioRecord.getMinBufferSize(
@@ -98,12 +110,15 @@ class TunerEngine(private val context: Context) {
         }
         recorder = audioRecord
         resetTracking()
+        running = true
         job = scope.launch {
             val buffer = ShortArray(bufferSize / 2)
             var missingFrames = 0
             try {
-                while (true) {
-                    val read = recorder?.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING) ?: 0
+                // AudioRecord 는 이 코루틴이 독점한다. 해제도 여기서만 하므로 read 중에 release 되는 일이 없다.
+                while (running) {
+                    val read = audioRecord.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
+                    if (!running) break
                     val estimate = if (read > 0) YinPitchDetector.detect(buffer, read, sampleRate) else null
                     if (estimate == null) {
                         missingFrames++
@@ -120,25 +135,33 @@ class TunerEngine(private val context: Context) {
                 throw error
             } catch (error: Throwable) {
                 _reading.value = TunerReading(error = "마이크 입력을 읽을 수 없습니다.")
+            } finally {
+                runCatching {
+                    if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) audioRecord.stop()
+                }
+                runCatching { audioRecord.release() }
             }
         }
     }
 
     fun stop() {
-        job?.cancel()
-        job = null
+        running = false
+        // stop() 은 다른 스레드에서 호출해도 안전하고, 블로킹 중인 read 를 즉시 반환시킨다.
+        // 실제 release 는 읽기 코루틴의 finally 에서 하므로 사용 중 해제로 인한 크래시가 없다.
         recorder?.let { audioRecord ->
-            try {
-                if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                    audioRecord.stop()
-                }
-            } catch (_: Throwable) {
-            } finally {
-                audioRecord.release()
+            runCatching {
+                if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) audioRecord.stop()
             }
         }
         recorder = null
+        job = null
         resetTracking()
+    }
+
+    /** 더 이상 이 엔진을 쓰지 않을 때 호출한다. 내부 코루틴 스코프까지 정리한다. */
+    fun dispose() {
+        stop()
+        scope.cancel()
     }
 
     @Synchronized
@@ -228,7 +251,8 @@ internal data class PitchEstimate(val frequency: Float, val confidence: Float, v
 
 internal object YinPitchDetector {
     private const val minFrequency = 65f
-    private const val maxFrequency = 380f
+    // 카포를 끼우거나 하이 포지션을 튜닝할 때도 잡히도록 1번 줄 기준으로 여유를 둔다.
+    private const val maxFrequency = 620f
     private const val yinThreshold = 0.16
     private const val minimumRms = 450f
 

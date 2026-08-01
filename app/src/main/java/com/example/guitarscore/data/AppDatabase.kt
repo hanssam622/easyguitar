@@ -16,7 +16,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ScoreChordEntity::class
     ],
     version = 3,
-    exportSchema = false
+    // 손으로 쓴 마이그레이션을 검증하려면 스키마 JSON 이 있어야 한다.
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun scoreDao(): ScoreDao

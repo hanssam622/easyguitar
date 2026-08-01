@@ -55,6 +55,9 @@ interface ScoreDao {
     @Query("DELETE FROM folders WHERE id = :folderId")
     suspend fun deleteFolderRow(folderId: Long)
 
+    @Query("DELETE FROM scores WHERE id = :scoreId")
+    suspend fun deleteScore(scoreId: Long)
+
     @Query("DELETE FROM turn_cues WHERE id = :cueId")
     suspend fun deleteCue(cueId: Long)
 

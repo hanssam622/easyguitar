@@ -1,5 +1,10 @@
 package com.example.guitarscore
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,18 +30,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PostAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -83,6 +90,7 @@ fun LibraryScreen(state: MainUiState, viewModel: MainViewModel) {
     var addFolderVisible by remember { mutableStateOf(false) }
     var folderToRename by remember { mutableStateOf<FolderEntity?>(null) }
     var scoreToEdit by remember { mutableStateOf<ScoreEntity?>(null) }
+    var scoreToDelete by remember { mutableStateOf<ScoreEntity?>(null) }
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { viewModel.importPdf(context, it, state.selectedFolderId) }
     }
@@ -116,18 +124,34 @@ fun LibraryScreen(state: MainUiState, viewModel: MainViewModel) {
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text(locationTitle, fontWeight = FontWeight.SemiBold) },
+                navigationIcon = {
+                    IconButton(onClick = viewModel::toggleSidebar) {
+                        Icon(
+                            Icons.Default.Menu,
+                            contentDescription = if (state.sidebarVisible) "사이드바 접기" else "사이드바 펼치기"
+                        )
+                    }
+                },
                 actions = {
                     OutlinedTextField(
                         value = state.searchQuery,
                         onValueChange = viewModel::setSearchQuery,
-                        modifier = Modifier.width(320.dp).padding(vertical = 4.dp),
+                        modifier = Modifier.width(300.dp).padding(vertical = 4.dp),
                         singleLine = true,
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         placeholder = { Text("악보 검색") }
                     )
-                    IconButton(onClick = { pdfPicker.launch(arrayOf("application/pdf")) }) {
-                        Icon(Icons.Default.UploadFile, contentDescription = "PDF 가져오기")
+                    Spacer(Modifier.width(8.dp))
+                    // 아이콘만으로는 무슨 기능인지 알기 어려워 글자를 함께 둔다.
+                    Button(
+                        onClick = { pdfPicker.launch(arrayOf("application/pdf")) },
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Icon(Icons.Default.PostAdd, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("악보 추가")
                     }
+                    Spacer(Modifier.width(8.dp))
                 }
             )
         }
@@ -138,17 +162,24 @@ fun LibraryScreen(state: MainUiState, viewModel: MainViewModel) {
                 .background(MaterialTheme.colorScheme.background)
                 .padding(padding)
         ) {
-            LibrarySidebar(
-                state = state,
-                onAll = viewModel::selectAllScores,
-                onFavorites = viewModel::selectFavorites,
-                onFolder = viewModel::selectFolder,
-                onAddFolder = { addFolderVisible = true },
-                onRenameFolder = { folderToRename = it },
-                onChords = viewModel::showChordTrainer,
-                onTuner = viewModel::toggleTuner,
-                onImport = { pdfPicker.launch(arrayOf("application/pdf")) }
-            )
+            AnimatedVisibility(
+                visible = state.sidebarVisible,
+                enter = expandHorizontally() + fadeIn(),
+                exit = shrinkHorizontally() + fadeOut()
+            ) {
+                LibrarySidebar(
+                    state = state,
+                    onAll = viewModel::selectAllScores,
+                    onFavorites = viewModel::selectFavorites,
+                    onFolder = viewModel::selectFolder,
+                    onAddFolder = { addFolderVisible = true },
+                    onRenameFolder = { folderToRename = it },
+                    onDeleteFolder = viewModel::deleteFolder,
+                    onChords = viewModel::showChordTrainer,
+                    onTuner = viewModel::toggleTuner,
+                    onImport = { pdfPicker.launch(arrayOf("application/pdf")) }
+                )
+            }
             Box(Modifier.fillMaxSize()) {
                 if (visibleScores.isEmpty()) {
                     EmptyLibraryState(
@@ -170,7 +201,8 @@ fun LibraryScreen(state: MainUiState, viewModel: MainViewModel) {
                                 thumbnail = state.thumbnails[score.id],
                                 onOpen = { viewModel.openScore(context, score.id) },
                                 onEdit = { scoreToEdit = score },
-                                onFavorite = { viewModel.toggleScoreFavorite(score) }
+                                onFavorite = { viewModel.toggleScoreFavorite(score) },
+                                onDelete = { scoreToDelete = score }
                             )
                         }
                     }
@@ -212,6 +244,20 @@ fun LibraryScreen(state: MainUiState, viewModel: MainViewModel) {
             }
         )
     }
+    scoreToDelete?.let { score ->
+        AlertDialog(
+            onDismissRequest = { scoreToDelete = null },
+            title = { Text("악보 삭제") },
+            text = { Text("'${score.title}' 을(를) 목록에서 지웁니다. 기록해 둔 넘김 큐와 코드도 함께 삭제됩니다. 원본 PDF 파일은 지워지지 않습니다.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteScore(context, score)
+                    scoreToDelete = null
+                }) { Text("삭제") }
+            },
+            dismissButton = { TextButton(onClick = { scoreToDelete = null }) { Text("취소") } }
+        )
+    }
     if (state.tunerVisible) {
         TunerOverlay(onDismiss = viewModel::toggleTuner)
     }
@@ -225,10 +271,13 @@ private fun LibrarySidebar(
     onFolder: (Long) -> Unit,
     onAddFolder: () -> Unit,
     onRenameFolder: (FolderEntity) -> Unit,
+    onDeleteFolder: (Long) -> Unit,
     onChords: () -> Unit,
     onTuner: () -> Unit,
     onImport: () -> Unit
 ) {
+    var folderMenuId by remember { mutableStateOf<Long?>(null) }
+    var folderToDelete by remember { mutableStateOf<FolderEntity?>(null) }
     Surface(
         modifier = Modifier.width(230.dp).fillMaxHeight(),
         color = Color(0xFF202532),
@@ -286,31 +335,74 @@ private fun LibrarySidebar(
                             tint = if (state.selectedFolderId == folder.id) Color(0xFF8EA7FF) else Color(0xFFB7BDCA)
                         )
                         Text(folder.name, modifier = Modifier.padding(start = 10.dp).weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        IconButton(onClick = { onRenameFolder(folder) }, modifier = Modifier.size(36.dp)) {
-                            Icon(Icons.Default.Edit, contentDescription = "폴더 이름 편집", modifier = Modifier.size(17.dp))
+                        Box {
+                            IconButton(onClick = { folderMenuId = folder.id }, modifier = Modifier.size(36.dp)) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "폴더 메뉴", modifier = Modifier.size(17.dp))
+                            }
+                            DropdownMenu(
+                                expanded = folderMenuId == folder.id,
+                                onDismissRequest = { folderMenuId = null }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("이름 편집") },
+                                    onClick = {
+                                        folderMenuId = null
+                                        onRenameFolder(folder)
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("폴더 삭제") },
+                                    onClick = {
+                                        folderMenuId = null
+                                        folderToDelete = folder
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) }
+                                )
+                            }
                         }
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = onImport, modifier = Modifier.weight(1f), shape = RoundedCornerShape(6.dp)) {
-                    Icon(Icons.Default.UploadFile, contentDescription = null)
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onImport, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(6.dp)) {
+                    Icon(Icons.Default.PostAdd, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("PDF 가져오기")
+                    Text("PDF 악보 추가")
                 }
-                Spacer(Modifier.width(10.dp))
+                // 아이콘만 있던 원형 버튼은 무슨 기능인지 알기 어려워 글자를 붙인 버튼으로 바꿨다.
                 Surface(
-                    modifier = Modifier.size(48.dp).clickable(onClick = onTuner),
-                    shape = CircleShape,
-                    color = Color(0xFF3559D9),
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onTuner),
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color(0xFF2C3446),
                     contentColor = Color.White
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Tune, contentDescription = "기타 튜너")
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.GraphicEq, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("기타 튜너", fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
         }
+    }
+
+    folderToDelete?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { folderToDelete = null },
+            title = { Text("폴더 삭제") },
+            text = { Text("'${folder.name}' 폴더를 지웁니다. 안에 있던 악보는 지워지지 않고 미분류로 이동합니다.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteFolder(folder.id)
+                    folderToDelete = null
+                }) { Text("삭제") }
+            },
+            dismissButton = { TextButton(onClick = { folderToDelete = null }) { Text("취소") } }
+        )
     }
 }
 
@@ -343,7 +435,8 @@ private fun ScoreThumbnailCard(
     thumbnail: android.graphics.Bitmap?,
     onOpen: () -> Unit,
     onEdit: () -> Unit,
-    onFavorite: () -> Unit
+    onFavorite: () -> Unit,
+    onDelete: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Card(
@@ -395,6 +488,14 @@ private fun ScoreThumbnailCard(
                             leadingIcon = {
                                 Icon(if (score.favorite) Icons.Default.Star else Icons.Default.StarBorder, contentDescription = null)
                             }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("삭제") },
+                            onClick = {
+                                menuExpanded = false
+                                onDelete()
+                            },
+                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) }
                         )
                     }
                 }

@@ -36,6 +36,11 @@ android {
     }
 }
 
+// 스키마를 내보내야 나중에 MigrationTestHelper 로 마이그레이션을 검증할 수 있다.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.08.00"))
     implementation("androidx.activity:activity-compose:1.10.1")

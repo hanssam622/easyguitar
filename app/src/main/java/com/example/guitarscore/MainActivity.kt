@@ -1,7 +1,6 @@
 package com.example.guitarscore
 
 import android.Manifest
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
@@ -13,57 +12,63 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -84,13 +89,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.graphicsLayer
-import kotlin.math.cos
-import kotlin.math.sin
+import androidx.activity.compose.BackHandler
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -99,22 +104,31 @@ import com.example.guitarscore.audio.AutoTurnState
 import com.example.guitarscore.audio.MetronomeEngine
 import com.example.guitarscore.audio.TunerEngine
 import com.example.guitarscore.audio.builtInTunings
-import com.example.guitarscore.data.ScoreEntity
+import com.example.guitarscore.chord.ChordDiagram
+import com.example.guitarscore.chord.ChordTrainerScreen
+import com.example.guitarscore.chord.ScoreChordHelperSidebar
+import com.example.guitarscore.chord.chordDefinition
+import com.example.guitarscore.chord.generateVoicings
 import com.example.guitarscore.data.FolderEntity
 import com.example.guitarscore.data.ScoreChordEntity
+import com.example.guitarscore.data.ScoreEntity
 import com.example.guitarscore.data.ScoreMetadataEntity
 import com.example.guitarscore.data.ScoreRepository
 import com.example.guitarscore.data.ScoreWithMetadata
 import com.example.guitarscore.data.TurnCueEntity
 import com.example.guitarscore.score.PdfPageRenderer
 import com.example.guitarscore.score.renderPdfThumbnail
-import com.example.guitarscore.chord.ChordTrainerScreen
-import com.example.guitarscore.chord.ScoreChordHelperSidebar
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<MainViewModel> {
@@ -151,6 +165,7 @@ data class MainUiState(
     val folders: List<FolderEntity> = emptyList(),
     val thumbnails: Map<Long, android.graphics.Bitmap> = emptyMap(),
     val destination: AppDestination = AppDestination.Library,
+    val sidebarVisible: Boolean = true,
     val selectedFolderId: Long? = null,
     val favoritesOnly: Boolean = false,
     val searchQuery: String = "",
@@ -160,22 +175,29 @@ data class MainUiState(
     val pageIndex: Int = 0,
     val pageCount: Int = 0,
     val pageBitmap: android.graphics.Bitmap? = null,
+    val pageAspectRatio: Float = 1.414f,
     val scrollPageBitmaps: Map<Int, android.graphics.Bitmap> = emptyMap(),
     val autoTurnState: AutoTurnState = AutoTurnState(),
     val metronomeRunning: Boolean = false,
+    val metronomeMuted: Boolean = false,
     val tunerVisible: Boolean = false,
     val chordHelperVisible: Boolean = false,
-    val toolbarExpanded: Boolean = false,
+    val quickChordName: String? = null,
+    val toolbarMode: ToolbarMode = ToolbarMode.Collapsed,
     val progressMode: ProgressMode = ProgressMode.PageTurn,
     val barsPerLine: Int = 4,
     val linesPerPage: Int = 5,
     val lineScrollDp: Int = 180,
-    val generatedScrollCues: List<ScrollCue> = emptyList()
+    val generatedScrollCues: List<ScrollCue> = emptyList(),
+    val message: String? = null
 )
 
 enum class AppDestination { Library, Chords }
 
 enum class ProgressMode { PageTurn, Scroll }
+
+/** 악보를 가리지 않도록 도구 모음은 접힌 상태가 기본이다. */
+enum class ToolbarMode { Collapsed, Bar, Expanded }
 
 data class ScrollCue(
     val lineIndex: Int,
@@ -191,8 +213,13 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
     private val metronome = MetronomeEngine()
     private var cueJob: Job? = null
     private var scoreChordJob: Job? = null
+    private var pageSaveJob: Job? = null
+    private var scrollRenderJob: Job? = null
     private var pdfRenderer: PdfPageRenderer? = null
     private val thumbnailJobs = mutableSetOf<Long>()
+
+    // 썸네일을 한꺼번에 렌더하면 PDF 를 수십 개 동시에 열게 되어 메모리가 터진다.
+    private val thumbnailGate = Semaphore(2)
 
     init {
         viewModelScope.launch {
@@ -209,9 +236,22 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
         }
     }
 
+    override fun onCleared() {
+        super.onCleared()
+        autoTurn.dispose()
+        metronome.stop()
+        pdfRenderer?.close()
+        pdfRenderer = null
+    }
+
+    fun dismissMessage() = _uiState.run { value = value.copy(message = null) }
+
     fun importPdf(context: android.content.Context, uri: Uri, folderId: Long? = _uiState.value.selectedFolderId) {
         viewModelScope.launch {
-            val id = repository.addPdf(context.contentResolver, uri, folderId)
+            val id = runCatching { repository.addPdf(context.contentResolver, uri, folderId) }.getOrElse {
+                _uiState.value = _uiState.value.copy(message = "PDF 를 가져오지 못했습니다.")
+                return@launch
+            }
             openScore(context, id)
         }
     }
@@ -221,9 +261,11 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
         state.scores.forEach { score ->
             if (score.id in state.thumbnails || !thumbnailJobs.add(score.id)) return@forEach
             viewModelScope.launch {
-                val thumbnail = runCatching {
-                    renderPdfThumbnail(context.applicationContext, Uri.parse(score.pdfUri))
-                }.getOrNull()
+                val thumbnail = thumbnailGate.withPermit {
+                    runCatching {
+                        renderPdfThumbnail(context.applicationContext, Uri.parse(score.pdfUri))
+                    }.getOrNull()
+                }
                 thumbnailJobs.remove(score.id)
                 if (thumbnail != null) {
                     _uiState.value = _uiState.value.copy(
@@ -233,6 +275,8 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
             }
         }
     }
+
+    fun toggleSidebar() = _uiState.run { value = value.copy(sidebarVisible = !value.sidebarVisible) }
 
     fun selectAllScores() = _uiState.run {
         value = value.copy(selectedFolderId = null, favoritesOnly = false)
@@ -281,6 +325,16 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
         }
     }
 
+    fun deleteScore(context: android.content.Context, score: ScoreEntity) {
+        viewModelScope.launch {
+            repository.deleteScore(context.contentResolver, score)
+            _uiState.value = _uiState.value.copy(
+                thumbnails = _uiState.value.thumbnails - score.id,
+                message = "'${score.title}' 을(를) 삭제했습니다."
+            )
+        }
+    }
+
     fun toggleScoreFavorite(score: ScoreEntity) {
         viewModelScope.launch {
             repository.updateScore(
@@ -291,25 +345,30 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
 
     fun openScore(context: android.content.Context, id: Long) {
         viewModelScope.launch {
-            autoTurn.stop()
-            metronome.stop()
-            cueJob?.cancel()
-            scoreChordJob?.cancel()
-            pdfRenderer?.close()
+            releaseScoreResources()
             val selected = repository.loadScore(id) ?: return@launch
             val renderer = PdfPageRenderer(context.applicationContext, Uri.parse(selected.score.pdfUri))
+            val pageCount = runCatching { renderer.open() }.getOrElse {
+                renderer.close()
+                _uiState.value = _uiState.value.copy(
+                    message = "'${selected.score.title}' 을(를) 열 수 없습니다. 파일이 이동되었거나 삭제되었을 수 있습니다."
+                )
+                return@launch
+            }
             pdfRenderer = renderer
-            val pageCount = renderer.open()
             val pageIndex = selected.score.lastOpenedPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
             _uiState.value = _uiState.value.copy(
                 selected = selected,
                 destination = AppDestination.Library,
                 pageIndex = pageIndex,
                 pageCount = pageCount,
+                pageBitmap = null,
                 scrollPageBitmaps = emptyMap(),
                 generatedScrollCues = emptyList(),
                 scoreChords = emptyList(),
                 chordHelperVisible = false,
+                quickChordName = null,
+                toolbarMode = ToolbarMode.Collapsed,
                 metronomeRunning = false,
                 autoTurnState = AutoTurnState()
             )
@@ -325,18 +384,25 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
         }
     }
 
-    fun closeScore() {
+    private fun releaseScoreResources() {
         autoTurn.stop()
         metronome.stop()
         cueJob?.cancel()
         scoreChordJob?.cancel()
+        pageSaveJob?.cancel()
+        scrollRenderJob?.cancel()
         pdfRenderer?.close()
         pdfRenderer = null
+    }
+
+    fun closeScore() {
+        releaseScoreResources()
         val state = _uiState.value
         _uiState.value = MainUiState(
             scores = state.scores,
             folders = state.folders,
             thumbnails = state.thumbnails,
+            sidebarVisible = state.sidebarVisible,
             selectedFolderId = state.selectedFolderId,
             favoritesOnly = state.favoritesOnly,
             searchQuery = state.searchQuery
@@ -348,18 +414,27 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
 
     private fun movePage(delta: Int) {
         val state = _uiState.value
+        if (state.selected == null) return
         val next = (state.pageIndex + delta).coerceIn(0, (state.pageCount - 1).coerceAtLeast(0))
         if (next == state.pageIndex) return
         _uiState.value = state.copy(pageIndex = next)
-        viewModelScope.launch {
-            renderCurrentPage()
-            state.selected?.let { repository.updateScore(it.score.copy(lastOpenedPage = next, updatedAt = System.currentTimeMillis())) }
+        viewModelScope.launch { renderCurrentPage() }
+        persistLastPage(next)
+    }
+
+    /** 페이지를 넘길 때마다 DB 를 건드리면 연주 중에 끊길 수 있어 잠시 모았다가 저장한다. */
+    private fun persistLastPage(page: Int) {
+        pageSaveJob?.cancel()
+        pageSaveJob = viewModelScope.launch {
+            delay(700)
+            val score = _uiState.value.selected?.score ?: return@launch
+            repository.updateScore(score.copy(lastOpenedPage = page, updatedAt = System.currentTimeMillis()))
         }
     }
 
     fun setBpm(bpm: Int) {
         val selected = _uiState.value.selected ?: return
-        val metadata = selected.metadata.copy(bpm = bpm)
+        val metadata = selected.metadata.copy(bpm = bpm.coerceIn(40, 220))
         _uiState.value = _uiState.value.copy(selected = selected.copy(metadata = metadata))
         viewModelScope.launch { repository.saveMetadata(metadata) }
     }
@@ -389,7 +464,14 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
             triggerBeat = state.autoTurnState.elapsedBeats.takeIf { state.autoTurnState.running },
             triggerMillis = if (state.autoTurnState.running) null else state.autoTurnState.elapsedMillis
         )
-        viewModelScope.launch { repository.addCue(cue) }
+        viewModelScope.launch {
+            repository.addCue(cue)
+            _uiState.value = _uiState.value.copy(message = "${state.pageIndex + 2}페이지 넘김 큐를 기록했습니다.")
+        }
+    }
+
+    fun deleteCue(cueId: Long) {
+        viewModelScope.launch { repository.deleteCue(cueId) }
     }
 
     fun startAutoTurn() {
@@ -401,8 +483,9 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
             onState = { _uiState.value = _uiState.value.copy(autoTurnState = it) },
             onTurnToPage = { page -> viewModelScope.launch { goToPage(page) } }
         )
-        metronome.start(metadata.bpm, metadata.timeSignature) { _, _ -> }
-        _uiState.value = state.copy(metronomeRunning = true)
+        metronome.start(metadata.bpm, metadata.timeSignature, muted = state.metronomeMuted) { _, _ -> }
+        // 연주가 시작되면 악보를 최대한 넓게 쓰도록 도구 모음을 접는다.
+        _uiState.value = _uiState.value.copy(metronomeRunning = true, toolbarMode = ToolbarMode.Collapsed)
     }
 
     fun stopAutoTurn() {
@@ -411,22 +494,60 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
         _uiState.value = _uiState.value.copy(autoTurnState = AutoTurnState(), metronomeRunning = false)
     }
 
+    fun toggleAutoTurnPause() {
+        val state = _uiState.value
+        if (!state.autoTurnState.running) return
+        val paused = !state.autoTurnState.paused
+        autoTurn.setPaused(paused)
+        metronome.setMuted(paused || state.metronomeMuted)
+        _uiState.value = state.copy(autoTurnState = state.autoTurnState.copy(paused = paused))
+    }
+
+    fun toggleMetronomeMuted() {
+        val muted = !_uiState.value.metronomeMuted
+        metronome.setMuted(muted)
+        _uiState.value = _uiState.value.copy(metronomeMuted = muted)
+    }
+
     fun nudge(deltaMillis: Long) = autoTurn.nudge(deltaMillis)
     fun toggleTuner() = _uiState.run { value = value.copy(tunerVisible = !value.tunerVisible) }
-    fun toggleChordHelper() = _uiState.run { value = value.copy(chordHelperVisible = !value.chordHelperVisible) }
+    fun toggleChordHelper() = _uiState.run {
+        value = value.copy(chordHelperVisible = !value.chordHelperVisible, quickChordName = null)
+    }
+
+    fun showQuickChord(name: String?) = _uiState.run {
+        value = value.copy(quickChordName = if (value.quickChordName == name) null else name)
+    }
+
     fun addScoreChord(chordName: String) {
         val scoreId = _uiState.value.selected?.score?.id ?: return
         viewModelScope.launch { repository.addScoreChord(ScoreChordEntity(scoreId, chordName)) }
     }
+
     fun removeScoreChord(chordName: String) {
         val scoreId = _uiState.value.selected?.score?.id ?: return
         viewModelScope.launch { repository.deleteScoreChord(scoreId, chordName) }
+        if (_uiState.value.quickChordName == chordName) {
+            _uiState.value = _uiState.value.copy(quickChordName = null)
+        }
     }
-    fun toggleToolbarExpanded() = _uiState.run { value = value.copy(toolbarExpanded = !value.toolbarExpanded) }
-    fun setProgressMode(mode: ProgressMode) = _uiState.run { value = value.copy(progressMode = mode) }
+
+    fun setToolbarMode(mode: ToolbarMode) = _uiState.run { value = value.copy(toolbarMode = mode) }
+
+    fun setProgressMode(mode: ProgressMode) {
+        val state = _uiState.value
+        if (state.progressMode == mode) return
+        _uiState.value = state.copy(progressMode = mode)
+        // 모드를 오갈 때 이전 페이지 비트맵이 남아 있으면 엉뚱한 페이지가 보인다.
+        viewModelScope.launch {
+            if (mode == ProgressMode.PageTurn) renderCurrentPage() else ensureScrollPages(state.pageIndex)
+        }
+    }
+
     fun setBarsPerLine(bars: Int) = _uiState.run { value = value.copy(barsPerLine = bars.coerceIn(1, 8)) }
     fun setLinesPerPage(lines: Int) = _uiState.run { value = value.copy(linesPerPage = lines.coerceIn(1, 12)) }
     fun setLineScrollDp(dp: Int) = _uiState.run { value = value.copy(lineScrollDp = dp.coerceIn(60, 520)) }
+
     fun generateScrollCues() {
         val state = _uiState.value
         val selected = state.selected ?: return
@@ -441,40 +562,69 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
             )
         }
         _uiState.value = state.copy(generatedScrollCues = cues, progressMode = ProgressMode.Scroll)
+        viewModelScope.launch { ensureScrollPages(state.pageIndex) }
     }
+
     fun goToPageFromScroll(page: Int) {
         val state = _uiState.value
         val next = page.coerceIn(0, (state.pageCount - 1).coerceAtLeast(0))
         if (next != state.pageIndex) {
             _uiState.value = state.copy(pageIndex = next)
+            persistLastPage(next)
         }
     }
-    fun ensureScrollPages() {
+
+    /**
+     * 스크롤 모드에서 보이는 페이지 주변만 렌더한다. 전체 페이지를 한꺼번에 올리면
+     * 20페이지짜리 악보에서 수백 MB 를 쓰게 되어 바로 OOM 이 난다.
+     */
+    fun ensureScrollPages(centerPage: Int) {
         val state = _uiState.value
-        if (state.pageCount == 0 || state.scrollPageBitmaps.size == state.pageCount) return
-        viewModelScope.launch {
+        if (state.pageCount == 0) return
+        val window = (centerPage - 1..centerPage + 1)
+            .filter { it in 0 until state.pageCount }
+            .toSet()
+        if (state.scrollPageBitmaps.keys.containsAll(window)) return
+        if (scrollRenderJob?.isActive == true) return
+        scrollRenderJob = viewModelScope.launch {
             val renderer = pdfRenderer ?: return@launch
             val rendered = linkedMapOf<Int, android.graphics.Bitmap>()
-            for (page in 0 until state.pageCount) {
-                rendered[page] = renderer.renderPage(page, 1400)
-                _uiState.value = _uiState.value.copy(scrollPageBitmaps = rendered.toMap())
+            window.forEach { page ->
+                runCatching { renderer.renderPage(page, PAGE_RENDER_WIDTH) }.getOrNull()?.let { rendered[page] = it }
             }
+            runCatching { renderer.trimTo(window) }
+            _uiState.value = _uiState.value.copy(
+                scrollPageBitmaps = rendered.toMap(),
+                pageAspectRatio = rendered.values.firstOrNull()?.let { it.height.toFloat() / it.width }
+                    ?: _uiState.value.pageAspectRatio
+            )
         }
     }
 
     private suspend fun goToPage(page: Int) {
         val next = page.coerceIn(0, (_uiState.value.pageCount - 1).coerceAtLeast(0))
+        if (next == _uiState.value.pageIndex) return
         _uiState.value = _uiState.value.copy(pageIndex = next)
         renderCurrentPage()
+        persistLastPage(next)
     }
 
     private suspend fun renderCurrentPage() {
         val renderer = pdfRenderer ?: return
-        val bitmap = renderer.renderPage(_uiState.value.pageIndex, 1800)
-        _uiState.value = _uiState.value.copy(pageBitmap = bitmap)
+        val bitmap = runCatching { renderer.renderPage(_uiState.value.pageIndex, PAGE_RENDER_WIDTH) }
+            .getOrElse {
+                _uiState.value = _uiState.value.copy(message = "페이지를 그릴 수 없습니다.")
+                return
+            }
+        _uiState.value = _uiState.value.copy(
+            pageBitmap = bitmap,
+            pageAspectRatio = bitmap.height.toFloat() / bitmap.width
+        )
     }
 
     companion object {
+        private const val PAGE_RENDER_WIDTH = 1_400
+
         fun factory(repository: ScoreRepository) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = MainViewModel(repository) as T
@@ -509,18 +659,42 @@ fun GuitarScoreTheme(content: @Composable () -> Unit) {
 @Composable
 fun GuitarScoreAppUi(viewModel: MainViewModel) {
     val state by viewModel.uiState.collectAsState()
-    if (state.selected != null) {
-        ViewerScreen(state, viewModel)
-    } else if (state.destination == AppDestination.Chords) {
-        ChordTrainerScreen(onBack = viewModel::showLibrary)
-    } else {
-        LibraryScreen(state, viewModel)
+    Box(Modifier.fillMaxSize()) {
+        when {
+            state.selected != null -> ViewerScreen(state, viewModel)
+            state.destination == AppDestination.Chords -> {
+                BackHandler(onBack = viewModel::showLibrary)
+                ChordTrainerScreen(onBack = viewModel::showLibrary)
+            }
+            else -> LibraryScreen(state, viewModel)
+        }
+        state.message?.let { message ->
+            LaunchedEffect(message) {
+                delay(3_000)
+                viewModel.dismissMessage()
+            }
+            Snackbar(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp)
+                    .widthIn(max = 460.dp),
+                action = { TextButton(onClick = viewModel::dismissMessage) { Text("닫기") } }
+            ) { Text(message) }
+        }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ViewerScreen(state: MainUiState, viewModel: MainViewModel) {
+    BackHandler {
+        when {
+            state.tunerVisible -> viewModel.toggleTuner()
+            state.chordHelperVisible -> viewModel.toggleChordHelper()
+            state.quickChordName != null -> viewModel.showQuickChord(null)
+            state.toolbarMode != ToolbarMode.Collapsed -> viewModel.setToolbarMode(ToolbarMode.Collapsed)
+            else -> viewModel.closeScore()
+        }
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -531,9 +705,18 @@ private fun ViewerScreen(state: MainUiState, viewModel: MainViewModel) {
             state = state,
             viewModel = viewModel,
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(10.dp)
+                .align(Alignment.TopEnd)
+                .padding(8.dp)
         )
+        if (!state.chordHelperVisible) {
+            QuickChordPanel(
+                state = state,
+                viewModel = viewModel,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 4.dp)
+            )
+        }
         PagePill(
             state = state,
             modifier = Modifier
@@ -551,21 +734,6 @@ private fun ViewerScreen(state: MainUiState, viewModel: MainViewModel) {
                     .width(390.dp)
                     .fillMaxHeight()
             )
-        } else {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .width(34.dp)
-                    .height(64.dp)
-                    .clickable(onClick = viewModel::toggleChordHelper),
-                color = Color(0xEFFFFFFF),
-                contentColor = Color(0xFF202532),
-                shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "코드 도우미 열기")
-                }
-            }
         }
         if (state.tunerVisible) {
             TunerOverlay(onDismiss = viewModel::toggleTuner)
@@ -575,46 +743,47 @@ private fun ViewerScreen(state: MainUiState, viewModel: MainViewModel) {
 
 @Composable
 private fun PdfPane(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
-    var scale by remember { mutableFloatStateOf(1f) }
     if (state.progressMode == ProgressMode.Scroll) {
-        ScrollScorePane(state = state, viewModel = viewModel, scale = scale, onScaleChange = { scale = it }, modifier = modifier)
+        ScrollScorePane(state = state, viewModel = viewModel, modifier = modifier)
         return
     }
-    val scrollState = rememberScrollState()
-    LaunchedEffect(state.progressMode, state.autoTurnState.elapsedBeats, state.pageIndex, scrollState.maxValue) {
-        if (state.progressMode == ProgressMode.Scroll && state.autoTurnState.running && scrollState.maxValue > 0) {
-            val progress = pageScrollProgress(state).coerceIn(0f, 1f)
-            scrollState.scrollTo((scrollState.maxValue * progress).toInt())
-        }
-    }
+    var scale by remember { mutableFloatStateOf(1f) }
+    val verticalScrollState = rememberScrollState()
+    val horizontalScrollState = rememberScrollState()
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
     Box(modifier = modifier.fillMaxHeight(), contentAlignment = Alignment.Center) {
         state.pageBitmap?.let { bitmap ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(scrollState)
+                    .verticalScroll(verticalScrollState)
+                    .horizontalScroll(horizontalScrollState)
+                    // 화면 절반씩을 탭 영역으로 쓰면 악보를 보다가 실수로 페이지가 넘어간다.
+                    // 양쪽 가장자리 20% 만 페이지 넘김에 쓰고 가운데는 비워 둔다.
+                    .pointerInput(Unit) {
+                        detectTapGestures { offset ->
+                            when {
+                                offset.x < size.width * 0.2f -> viewModel.previousPage()
+                                offset.x > size.width * 0.8f -> viewModel.nextPage()
+                            }
+                        }
+                    }
                     .pointerInput(Unit) {
                         detectTransformGestures { _, _, zoom, _ ->
-                            scale = (scale * zoom).coerceIn(0.75f, 3f)
+                            scale = (scale * zoom).coerceIn(1f, 3f)
                         }
                     }
             ) {
                 Image(
                     bitmap = bitmap.asImageBitmap(),
-                    contentDescription = "PDF page",
+                    contentDescription = "악보 ${state.pageIndex + 1}페이지",
                     contentScale = ContentScale.FillWidth,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .graphicsLayer(scaleX = scale, scaleY = scale)
+                    // graphicsLayer 로 키우면 레이아웃 크기는 그대로라 확대 후 가장자리를 볼 수 없다.
+                    // 폭 자체를 늘리고 스크롤로 이동하게 한다.
+                    modifier = Modifier.width(screenWidth * scale)
                 )
             }
         } ?: Text("PDF 렌더링 중...", color = Color.White)
-        if (state.progressMode == ProgressMode.PageTurn) {
-            Row(Modifier.fillMaxSize()) {
-                Box(Modifier.weight(1f).fillMaxHeight().clickable { viewModel.previousPage() })
-                Box(Modifier.weight(1f).fillMaxHeight().clickable { viewModel.nextPage() })
-            }
-        }
     }
 }
 
@@ -622,80 +791,65 @@ private fun PdfPane(state: MainUiState, viewModel: MainViewModel, modifier: Modi
 private fun ScrollScorePane(
     state: MainUiState,
     viewModel: MainViewModel,
-    scale: Float,
-    onScaleChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
     val density = LocalDensity.current
     val lineScrollPx = with(density) { state.lineScrollDp.dp.roundToPx() }
     val currentLineIndex = autoScrollLineIndex(state)
-    LaunchedEffect(state.pageCount, state.progressMode) {
-        viewModel.ensureScrollPages()
+
+    LaunchedEffect(state.pageIndex, state.pageCount) {
+        viewModel.ensureScrollPages(state.pageIndex)
     }
-    LaunchedEffect(currentLineIndex, state.autoTurnState.running, scrollState.maxValue, state.scrollPageBitmaps.size, lineScrollPx) {
-        if (state.autoTurnState.running && scrollState.maxValue > 0) {
+    LaunchedEffect(currentLineIndex, state.autoTurnState.running, state.autoTurnState.paused, scrollState.maxValue, lineScrollPx) {
+        if (state.autoTurnState.running && !state.autoTurnState.paused && scrollState.maxValue > 0) {
             val target = (currentLineIndex * lineScrollPx).coerceIn(0, scrollState.maxValue)
             scrollState.animateScrollTo(target)
         }
     }
-    LaunchedEffect(scrollState.maxValue) {
+    LaunchedEffect(scrollState.maxValue, state.pageCount) {
+        if (scrollState.maxValue <= 0 || state.pageCount <= 0) return@LaunchedEffect
         snapshotFlow { scrollState.value }.collect { value ->
-            if (scrollState.maxValue > 0 && state.pageCount > 0) {
-                val page = ((value.toFloat() / scrollState.maxValue) * state.pageCount).toInt()
-                val linePage = (value / state.lineScrollDp.coerceAtLeast(1))
-                    .coerceAtLeast(0) / state.linesPerPage.coerceAtLeast(1)
-                val resolvedPage = if (state.generatedScrollCues.isNotEmpty()) linePage else page
-                val currentPage = resolvedPage
-                    .coerceIn(0, (state.pageCount - 1).coerceAtLeast(0))
-                if (currentPage != state.pageIndex) viewModel.goToPageFromScroll(currentPage)
-            }
+            val page = ((value.toFloat() / scrollState.maxValue) * state.pageCount).toInt()
+                .coerceIn(0, state.pageCount - 1)
+            if (page != state.pageIndex) viewModel.goToPageFromScroll(page)
         }
     }
+
     Box(modifier = modifier.fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(top = 66.dp, bottom = 44.dp)
-                .clickable(enabled = false) {},
+                .padding(top = 12.dp, bottom = 44.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (state.scrollPageBitmaps.isEmpty()) {
-                Text("스크롤용 악보 렌더링 중...", color = Color.White, modifier = Modifier.padding(36.dp))
-            } else {
-                for (page in 0 until state.pageCount) {
-                    state.scrollPageBitmaps[page]?.let { bitmap ->
+            // 페이지 자리는 항상 잡아 두고 그림만 창 안에서 채운다. 그래야 스크롤 위치가 흔들리지 않으면서
+            // 메모리에 올라가는 비트맵은 3장으로 유지된다.
+            for (page in 0 until state.pageCount) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.94f)
+                        .aspectRatio(1f / state.pageAspectRatio)
+                        .background(Color(0xFF23262C)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val bitmap = state.scrollPageBitmaps[page]
+                    if (bitmap != null) {
                         Image(
                             bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "PDF page ${page + 1}",
+                            contentDescription = "악보 ${page + 1}페이지",
                             contentScale = ContentScale.FillWidth,
-                            modifier = Modifier
-                                .fillMaxWidth(0.94f)
-                                .background(Color.White)
-                                .graphicsLayer(scaleX = scale, scaleY = scale)
+                            modifier = Modifier.fillMaxWidth().background(Color.White)
                         )
+                    } else {
+                        Text("${page + 1}", color = Color(0xFF6C7382), fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
     }
-}
-
-private fun pageScrollProgress(state: MainUiState): Float {
-    val currentPage = state.pageIndex
-    val currentBeat = state.autoTurnState.elapsedBeats
-    val previousBeat = state.cues
-        .filter { it.pageIndex <= currentPage }
-        .mapNotNull { it.triggerBeat }
-        .maxOrNull() ?: (currentPage * 32f)
-    val nextBeat = state.cues
-        .filter { it.pageIndex == currentPage + 1 }
-        .mapNotNull { it.triggerBeat }
-        .minOrNull() ?: (previousBeat + 32f)
-    val span = (nextBeat - previousBeat).coerceAtLeast(1f)
-    return (currentBeat - previousBeat) / span
 }
 
 private fun autoScrollLineIndex(state: MainUiState): Int {
@@ -711,50 +865,17 @@ private fun autoScrollLineIndex(state: MainUiState): Int {
 }
 
 @Composable
-private fun ControlPane(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
-    val metadata = state.selected?.metadata ?: return
-    Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface) {
-        LazyColumn(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            item {
-                Text("연주 설정", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("Page ${state.pageIndex + 1} / ${state.pageCount}")
-            }
-            item {
-                Text("BPM ${metadata.bpm}")
-                Slider(
-                    value = metadata.bpm.toFloat(),
-                    onValueChange = { viewModel.setBpm(it.toInt()) },
-                    valueRange = 40f..220f
-                )
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(3, 4, 6).forEach { beats ->
-                        OutlinedButton(onClick = { viewModel.setTimeSignature(beats) }) {
-                            Text("${beats}/4")
-                        }
-                    }
-                }
-            }
-            item {
-                AutoTurnPanel(state, viewModel)
-            }
-            item {
-                CueList(state)
-            }
-            if (state.tunerVisible) {
-                item {
-                    TunerOverlay(onDismiss = viewModel::toggleTuner)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun PerformanceToolbar(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val selected = state.selected ?: return
     val metadata = selected.metadata
+    if (state.toolbarMode == ToolbarMode.Collapsed) {
+        CollapsedToolbarButton(
+            running = state.autoTurnState.running,
+            onClick = { viewModel.setToolbarMode(ToolbarMode.Bar) },
+            modifier = modifier
+        )
+        return
+    }
     Surface(
         modifier = modifier,
         color = Color(0xEE101418),
@@ -769,28 +890,70 @@ private fun PerformanceToolbar(state: MainUiState, viewModel: MainViewModel, mod
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 IconButton(onClick = viewModel::closeScore) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "라이브러리")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "라이브러리로 나가기")
                 }
                 IconButton(onClick = viewModel::previousPage) {
                     Icon(Icons.Default.SkipPrevious, contentDescription = "이전 페이지")
                 }
-                IconButton(onClick = { if (state.autoTurnState.running) viewModel.stopAutoTurn() else viewModel.startAutoTurn() }) {
-                    Icon(if (state.autoTurnState.running) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "자동 진행")
+                IconButton(
+                    onClick = {
+                        if (state.autoTurnState.running) viewModel.toggleAutoTurnPause() else viewModel.startAutoTurn()
+                    }
+                ) {
+                    Icon(
+                        if (state.autoTurnState.running && !state.autoTurnState.paused) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (state.autoTurnState.running) "일시정지" else "자동 진행 시작"
+                    )
+                }
+                if (state.autoTurnState.running) {
+                    IconButton(onClick = viewModel::stopAutoTurn) {
+                        Icon(Icons.Default.Stop, contentDescription = "자동 진행 정지")
+                    }
                 }
                 IconButton(onClick = viewModel::nextPage) {
                     Icon(Icons.Default.SkipNext, contentDescription = "다음 페이지")
                 }
                 Text("${metadata.bpm}", fontWeight = FontWeight.Bold, modifier = Modifier.width(38.dp))
-                IconButton(onClick = viewModel::toggleTuner) {
-                    Icon(Icons.Default.Tune, contentDescription = "기타 튜너")
+                IconButton(onClick = viewModel::toggleMetronomeMuted) {
+                    Icon(
+                        if (state.metronomeMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = if (state.metronomeMuted) "메트로놈 소리 켜기" else "메트로놈 소리 끄기"
+                    )
                 }
-                IconButton(onClick = viewModel::toggleToolbarExpanded) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "상세 설정")
+                IconButton(onClick = viewModel::toggleTuner) {
+                    Icon(Icons.Default.GraphicEq, contentDescription = "기타 튜너")
+                }
+                IconButton(
+                    onClick = {
+                        viewModel.setToolbarMode(
+                            if (state.toolbarMode == ToolbarMode.Expanded) ToolbarMode.Bar else ToolbarMode.Expanded
+                        )
+                    }
+                ) {
+                    Icon(Icons.Default.Tune, contentDescription = "상세 설정")
+                }
+                IconButton(onClick = { viewModel.setToolbarMode(ToolbarMode.Collapsed) }) {
+                    Icon(Icons.Default.ExpandLess, contentDescription = "도구 모음 접기")
                 }
             }
-            if (state.toolbarExpanded) {
+            if (state.toolbarMode == ToolbarMode.Expanded) {
                 ExpandedToolbarPanel(state = state, viewModel = viewModel)
             }
+        }
+    }
+}
+
+/** 접힌 상태의 도구 모음. 악보 상단을 가리지 않도록 아이콘 하나만 떠 있는다. */
+@Composable
+private fun CollapsedToolbarButton(running: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.size(44.dp).clickable(onClick = onClick),
+        shape = CircleShape,
+        color = if (running) Color(0xCC3559D9) else Color(0x99101418),
+        contentColor = Color.White
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(Icons.Default.MoreHoriz, contentDescription = "연주 도구 열기")
         }
     }
 }
@@ -800,7 +963,11 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
     val selected = state.selected ?: return
     val metadata = selected.metadata
     Column(
-        modifier = Modifier.width(520.dp).padding(8.dp),
+        modifier = Modifier
+            .width(520.dp)
+            .heightIn(max = 460.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -811,7 +978,7 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
                 Text("BPM ${metadata.bpm}", fontWeight = FontWeight.SemiBold)
                 Slider(
                     value = metadata.bpm.toFloat(),
-                    onValueChange = { viewModel.setBpm(it.toInt()) },
+                    onValueChange = { viewModel.setBpm(it.roundToInt()) },
                     valueRange = 40f..220f
                 )
             }
@@ -845,7 +1012,10 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
                 Icon(Icons.Default.FastForward, contentDescription = "1초 늦추기")
             }
             IconButton(onClick = viewModel::toggleFavorite) {
-                Icon(if (selected.score.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "즐겨찾기")
+                Icon(
+                    if (selected.score.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = "즐겨찾기"
+                )
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -861,7 +1031,7 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
                 Text("줄 이동 ${state.lineScrollDp}dp", style = MaterialTheme.typography.bodySmall)
                 Slider(
                     value = state.lineScrollDp.toFloat(),
-                    onValueChange = { viewModel.setLineScrollDp(it.toInt()) },
+                    onValueChange = { viewModel.setLineScrollDp(it.roundToInt()) },
                     valueRange = 60f..520f
                 )
             }
@@ -884,16 +1054,93 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
             style = MaterialTheme.typography.bodySmall
         )
         if (state.generatedScrollCues.isNotEmpty()) {
-            val preview = state.generatedScrollCues.take(6).joinToString("  ") { cue ->
-                "B${cue.triggerBeat.toInt()}→P${cue.pageIndex + 1}L${cue.lineIndex + 1}"
-            }
-            Text("생성 큐 ${state.generatedScrollCues.size}개 · $preview", style = MaterialTheme.typography.bodySmall)
+            Text("생성 큐 ${state.generatedScrollCues.size}개", style = MaterialTheme.typography.bodySmall)
         }
         if (state.cues.isNotEmpty()) {
-            Text(
-                "큐 ${state.cues.size}개 · ${state.cues.take(4).joinToString("  ") { cue -> "${cue.triggerBeat?.let { "%.1f".format(it) } ?: ((cue.triggerMillis ?: 0) / 1000).toString()}→P${cue.pageIndex + 1}" }}",
-                style = MaterialTheme.typography.bodySmall
-            )
+            Text("저장된 큐 ${state.cues.size}개", fontWeight = FontWeight.SemiBold)
+            state.cues.forEach { cue ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val trigger = cue.triggerBeat?.let { "${"%.1f".format(it)} beat" }
+                        ?: "${(cue.triggerMillis ?: 0) / 1000}초"
+                    Text("$trigger → ${cue.pageIndex + 1}페이지", modifier = Modifier.weight(1f))
+                    IconButton(onClick = { viewModel.deleteCue(cue.id) }, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "큐 삭제", modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 악보 오른쪽 가장자리의 코드 빠르게 보기. 저장해 둔 코드 이름만 얇게 세워 두고,
+ * 이름을 누르면 작은 다이어그램이 옆에 뜬다. 악보를 거의 가리지 않는 것이 목적이다.
+ */
+@Composable
+private fun QuickChordPanel(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
+    val names = state.scoreChords.map { it.chordName }
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        state.quickChordName?.let { name ->
+            val voicing = remember(name) { chordDefinition(name)?.let { generateVoicings(it).firstOrNull() } }
+            Card(
+                modifier = Modifier.width(224.dp).padding(end = 6.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xF2FFFFFF)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+            ) {
+                Column(Modifier.padding(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { viewModel.showQuickChord(null) }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "닫기", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                    if (voicing != null) {
+                        Text(voicing.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        ChordDiagram(voicing, Modifier.fillMaxWidth().height(112.dp), showStringNames = false)
+                    } else {
+                        Text("운지 정보를 찾을 수 없습니다.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+        Surface(
+            color = Color(0xCC101418),
+            contentColor = Color.White,
+            shape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp)
+        ) {
+            Column(
+                modifier = Modifier.width(46.dp).padding(vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                names.take(10).forEach { name ->
+                    val active = state.quickChordName == name
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.showQuickChord(name) },
+                        color = if (active) MaterialTheme.colorScheme.primary else Color.Transparent,
+                        contentColor = Color.White,
+                        shape = RoundedCornerShape(5.dp)
+                    ) {
+                        Text(
+                            name,
+                            modifier = Modifier.padding(vertical = 7.dp),
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                IconButton(onClick = viewModel::toggleChordHelper, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        if (names.isEmpty()) Icons.Default.Add else Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                        contentDescription = "코드 도우미 열기",
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -901,83 +1148,16 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
 @Composable
 private fun PagePill(state: MainUiState, modifier: Modifier = Modifier) {
     Surface(modifier = modifier, color = Color(0xCC101418), contentColor = Color.White, shape = MaterialTheme.shapes.medium) {
+        val suffix = when {
+            !state.autoTurnState.running -> ""
+            state.autoTurnState.paused -> " · 일시정지"
+            else -> " · ${"%.1f".format(state.autoTurnState.elapsedBeats)} beat"
+        }
         Text(
-            "Page ${state.pageIndex + 1} / ${state.pageCount} · ${"%.1f".format(state.autoTurnState.elapsedBeats)} beat · ${if (state.progressMode == ProgressMode.Scroll) "Scroll" else "Page"}",
+            "${state.pageIndex + 1} / ${state.pageCount}$suffix",
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
             style = MaterialTheme.typography.bodyMedium
         )
-    }
-}
-
-@Composable
-private fun AutoTurnPanel(state: MainUiState, viewModel: MainViewModel) {
-    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFFFF))) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("자동 넘김", fontWeight = FontWeight.SemiBold)
-            Text("박자 ${"%.1f".format(state.autoTurnState.elapsedBeats)} · ${state.autoTurnState.elapsedMillis / 1000}s")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { if (state.autoTurnState.running) viewModel.stopAutoTurn() else viewModel.startAutoTurn() }) {
-                    Icon(if (state.autoTurnState.running) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (state.autoTurnState.running) "정지" else "시작")
-                }
-                OutlinedButton(onClick = viewModel::recordCue) {
-                    Icon(Icons.Default.SkipNext, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text("큐 기록")
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { viewModel.nudge(-1_000) }) {
-                    Icon(Icons.Default.FastRewind, contentDescription = null)
-                    Text("-1s")
-                }
-                OutlinedButton(onClick = { viewModel.nudge(1_000) }) {
-                    Icon(Icons.Default.FastForward, contentDescription = null)
-                    Text("+1s")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CueList(state: MainUiState) {
-    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("저장된 큐", fontWeight = FontWeight.SemiBold)
-            if (state.cues.isEmpty()) {
-                Text("아직 큐가 없습니다.")
-            } else {
-                state.cues.forEach { cue ->
-                    val trigger = cue.triggerBeat?.let { "${"%.1f".format(it)} beat" } ?: "${(cue.triggerMillis ?: 0) / 1000}s"
-                    Text("$trigger -> Page ${cue.pageIndex + 1}")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TransportBar(state: MainUiState, viewModel: MainViewModel) {
-    Surface(color = Color(0xFF101418), contentColor = Color.White) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            IconButton(onClick = viewModel::previousPage) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = "이전 페이지")
-            }
-            Text("Page ${state.pageIndex + 1} / ${state.pageCount}", modifier = Modifier.padding(horizontal = 18.dp))
-            IconButton(onClick = viewModel::nextPage) {
-                Icon(Icons.Default.SkipNext, contentDescription = "다음 페이지")
-            }
-            Spacer(Modifier.width(24.dp))
-            TextButton(onClick = viewModel::recordCue) {
-                Text("Cue", color = Color.White)
-            }
-        }
     }
 }
 
@@ -1002,7 +1182,7 @@ fun TunerOverlay(onDismiss: () -> Unit) {
         }
     }
     DisposableEffect(Unit) {
-        onDispose { engine.stop() }
+        onDispose { engine.dispose() }
     }
     Box(
         Modifier
@@ -1038,8 +1218,17 @@ fun TunerOverlay(onDismiss: () -> Unit) {
                     fontWeight = FontWeight.SemiBold,
                     color = if (reading.inTune) Color(0xFF16836B) else Color(0xFFB26A00)
                 )
-                Text("${reading.frequency.toInt()} Hz · ${reading.cents} cents · detected ${reading.note}")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (reading.permissionRequired) {
+                    Button(onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }) {
+                        Text("마이크 권한 허용하기")
+                    }
+                } else {
+                    Text("${reading.frequency.toInt()} Hz · ${reading.cents} cents · 감지 ${reading.note}")
+                }
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     builtInTunings.forEach { preset ->
                         val selected = selectedPreset == preset
                         Surface(

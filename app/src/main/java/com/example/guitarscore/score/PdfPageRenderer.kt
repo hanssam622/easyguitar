@@ -7,56 +7,92 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
+/**
+ * PDF 한 부를 열어 두고 페이지를 비트맵으로 렌더한다.
+ *
+ * PdfRenderer 는 한 번에 한 페이지만 열 수 있으므로 모든 접근을 [mutex] 로 직렬화한다.
+ * 비트맵은 화면에 붙어 있는 동안 recycle 하면 크래시가 나므로 캐시에서 밀려나도 recycle 하지 않고
+ * GC 에 맡긴다. 대신 캐시를 작게 유지해 메모리를 억제한다.
+ */
 class PdfPageRenderer(private val context: Context, private val uri: Uri) : AutoCloseable {
+    private val mutex = Mutex()
     private var descriptor: ParcelFileDescriptor? = null
     private var renderer: PdfRenderer? = null
     private val cache = linkedMapOf<Int, Bitmap>()
+    @Volatile private var closed = false
 
     suspend fun open(): Int = withContext(Dispatchers.IO) {
-        if (renderer == null) {
-            descriptor = context.contentResolver.openFileDescriptor(uri, "r")
-            renderer = PdfRenderer(requireNotNull(descriptor))
+        mutex.withLock {
+            check(!closed) { "renderer is closed" }
+            if (renderer == null) {
+                val opened = context.contentResolver.openFileDescriptor(uri, "r")
+                    ?: error("PDF 파일을 열 수 없습니다.")
+                descriptor = opened
+                renderer = PdfRenderer(opened)
+            }
+            requireNotNull(renderer).pageCount
         }
-        requireNotNull(renderer).pageCount
     }
 
     suspend fun renderPage(pageIndex: Int, targetWidth: Int): Bitmap = withContext(Dispatchers.IO) {
-        cache[pageIndex]?.let { return@withContext it }
-        val pdfRenderer = requireNotNull(renderer)
-        pdfRenderer.openPage(pageIndex).use { page ->
-            val scale = targetWidth.toFloat() / page.width.toFloat()
-            val width = targetWidth.coerceAtLeast(320)
-            val height = (page.height * scale).roundToInt().coerceAtLeast(320)
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            bitmap.eraseColor(Color.WHITE)
-            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            cache[pageIndex] = bitmap
-            while (cache.size > 48) {
-                val firstKey = cache.keys.first()
-                cache.remove(firstKey)?.recycle()
+        mutex.withLock {
+            check(!closed) { "renderer is closed" }
+            cache.remove(pageIndex)?.let { cached ->
+                cache[pageIndex] = cached // 접근한 항목을 뒤로 보내 LRU 로 동작시킨다.
+                return@withLock cached
             }
-            bitmap
+            val pdfRenderer = requireNotNull(renderer) { "open() 을 먼저 호출해야 합니다." }
+            pdfRenderer.openPage(pageIndex).use { page ->
+                val width = targetWidth.coerceIn(320, MAX_RENDER_WIDTH)
+                val height = (page.height * (width.toFloat() / page.width)).roundToInt().coerceAtLeast(320)
+                // 악보는 사실상 흑백이라 RGB_565 로도 충분하고 메모리는 절반만 쓴다.
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+                bitmap.eraseColor(Color.WHITE)
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                cache[pageIndex] = bitmap
+                while (cache.size > MAX_CACHED_PAGES) {
+                    cache.remove(cache.keys.first())
+                }
+                bitmap
+            }
+        }
+    }
+
+    /** 창 밖으로 벗어난 페이지를 캐시에서 버린다. 스크롤 모드의 메모리를 일정하게 유지하는 용도. */
+    suspend fun trimTo(keep: Set<Int>) {
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                cache.keys.toList().filterNot { it in keep }.forEach { cache.remove(it) }
+            }
         }
     }
 
     override fun close() {
-        cache.values.forEach { it.recycle() }
+        // 화면에 아직 붙어 있을 수 있으므로 비트맵은 recycle 하지 않는다.
+        closed = true
         cache.clear()
-        renderer?.close()
-        descriptor?.close()
+        runCatching { renderer?.close() }
+        runCatching { descriptor?.close() }
         renderer = null
         descriptor = null
     }
+
+    private companion object {
+        const val MAX_CACHED_PAGES = 4
+        const val MAX_RENDER_WIDTH = 1_600
+    }
 }
 
-suspend fun renderPdfThumbnail(context: Context, uri: Uri, targetWidth: Int = 420): Bitmap {
+suspend fun renderPdfThumbnail(context: Context, uri: Uri, targetWidth: Int = 360): Bitmap {
     val renderer = PdfPageRenderer(context.applicationContext, uri)
     return try {
         renderer.open()
-        renderer.renderPage(0, targetWidth).copy(Bitmap.Config.ARGB_8888, false)
+        renderer.renderPage(0, targetWidth)
     } finally {
         renderer.close()
     }
