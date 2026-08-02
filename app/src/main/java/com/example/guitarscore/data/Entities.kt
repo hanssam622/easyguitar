@@ -80,6 +80,13 @@ data class ScoreChordEntity(
     val addedAt: Long = System.currentTimeMillis()
 )
 
+/** 사용자가 외우려고 따로 모아 둔 코드. 퀴즈의 "내 코드 모음" 출처가 된다. */
+@Entity(tableName = "quiz_chords", primaryKeys = ["chordName"])
+data class QuizChordEntity(
+    val chordName: String,
+    val addedAt: Long = System.currentTimeMillis()
+)
+
 data class ScoreWithMetadata(
     val score: ScoreEntity,
     val metadata: ScoreMetadataEntity

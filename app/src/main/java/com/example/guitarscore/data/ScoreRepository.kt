@@ -11,6 +11,7 @@ class ScoreRepository(private val dao: ScoreDao) {
     fun observeFolders(): Flow<List<FolderEntity>> = dao.observeFolders()
     fun observeCues(scoreId: Long): Flow<List<TurnCueEntity>> = dao.observeCues(scoreId)
     fun observeScoreChords(scoreId: Long): Flow<List<ScoreChordEntity>> = dao.observeScoreChords(scoreId)
+    fun observeQuizChords(): Flow<List<QuizChordEntity>> = dao.observeQuizChords()
 
     suspend fun addPdf(contentResolver: ContentResolver, uri: Uri, folderId: Long? = null): Long {
         // 앱을 재시작해도 열 수 있으려면 영구 권한이 필요하다. 제공자가 거부하더라도 이번 세션에서는
@@ -58,4 +59,6 @@ class ScoreRepository(private val dao: ScoreDao) {
     suspend fun deleteCue(cueId: Long) = dao.deleteCue(cueId)
     suspend fun addScoreChord(chord: ScoreChordEntity) = dao.upsertScoreChord(chord)
     suspend fun deleteScoreChord(scoreId: Long, chordName: String) = dao.deleteScoreChord(scoreId, chordName)
+    suspend fun addQuizChord(chordName: String) = dao.upsertQuizChord(QuizChordEntity(chordName))
+    suspend fun deleteQuizChord(chordName: String) = dao.deleteQuizChord(chordName)
 }

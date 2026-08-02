@@ -13,9 +13,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         FolderEntity::class,
         ScoreMetadataEntity::class,
         TurnCueEntity::class,
-        ScoreChordEntity::class
+        ScoreChordEntity::class,
+        QuizChordEntity::class
     ],
-    version = 3,
+    version = 4,
     // 손으로 쓴 마이그레이션을 검증하려면 스키마 JSON 이 있어야 한다.
     exportSchema = true
 )
@@ -57,10 +58,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val migration3To4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS quiz_chords (
+                        chordName TEXT NOT NULL,
+                        addedAt INTEGER NOT NULL,
+                        PRIMARY KEY(chordName)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context,
             AppDatabase::class.java,
             "guitar-score.db"
-        ).addMigrations(migration1To2, migration2To3).build()
+        ).addMigrations(migration1To2, migration2To3, migration3To4).build()
     }
 }

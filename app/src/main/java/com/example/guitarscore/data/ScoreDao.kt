@@ -28,6 +28,15 @@ interface ScoreDao {
     @Query("SELECT * FROM score_chords WHERE scoreId = :scoreId ORDER BY addedAt")
     fun observeScoreChords(scoreId: Long): Flow<List<ScoreChordEntity>>
 
+    @Query("SELECT * FROM quiz_chords ORDER BY addedAt")
+    fun observeQuizChords(): Flow<List<QuizChordEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertQuizChord(chord: QuizChordEntity)
+
+    @Query("DELETE FROM quiz_chords WHERE chordName = :chordName")
+    suspend fun deleteQuizChord(chordName: String)
+
     @Insert
     suspend fun insertScore(score: ScoreEntity): Long
 

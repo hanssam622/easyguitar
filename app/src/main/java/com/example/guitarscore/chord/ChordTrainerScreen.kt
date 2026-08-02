@@ -69,7 +69,11 @@ private val chordFamilies = listOf<String?>(null, "A", "B", "C", "D", "E", "F", 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChordTrainerScreen(onBack: () -> Unit) {
+fun ChordTrainerScreen(
+    onBack: () -> Unit,
+    quizChordNames: List<String> = emptyList(),
+    onToggleQuizChord: (String) -> Unit = {}
+) {
     var selectedTab by remember { mutableIntStateOf(0) }
     Scaffold(
         topBar = {
@@ -92,10 +96,16 @@ fun ChordTrainerScreen(onBack: () -> Unit) {
             TabRow(selectedTabIndex = selectedTab, containerColor = MaterialTheme.colorScheme.surface) {
                 Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("코드 만들기") })
                 Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("코드 운지 찾기") })
+                Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("코드 외우기") })
             }
             when (selectedTab) {
                 0 -> ChordBuilderScreen(Modifier.fillMaxSize().padding(20.dp))
-                else -> ChordFinderScreen(Modifier.fillMaxSize().padding(20.dp))
+                1 -> ChordFinderScreen(Modifier.fillMaxSize().padding(20.dp))
+                else -> ChordQuizScreen(
+                    quizChordNames = quizChordNames,
+                    onToggleQuizChord = onToggleQuizChord,
+                    modifier = Modifier.fillMaxSize().padding(20.dp)
+                )
             }
         }
     }
@@ -274,7 +284,7 @@ private fun ChordFinderScreen(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ChordFamilyTabs(selected: String?, onSelect: (String?) -> Unit) {
+internal fun ChordFamilyTabs(selected: String?, onSelect: (String?) -> Unit) {
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -290,7 +300,7 @@ private fun ChordFamilyTabs(selected: String?, onSelect: (String?) -> Unit) {
 }
 
 @Composable
-private fun ChordGrid(
+internal fun ChordGrid(
     chords: List<ChordDefinition>,
     onOpen: (ChordDefinition) -> Unit,
     modifier: Modifier = Modifier,
@@ -348,7 +358,7 @@ private fun ChordThumbnailCard(
 }
 
 @Composable
-private fun ChordDetailDialog(chord: ChordDefinition, onDismiss: () -> Unit) {
+internal fun ChordDetailDialog(chord: ChordDefinition, onDismiss: () -> Unit) {
     val voicings = remember(chord) { generateVoicings(chord) }
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -443,7 +453,7 @@ fun ScoreChordHelperSidebar(
     selectedChord?.let { chord -> ChordDetailDialog(chord, onDismiss = { selectedChord = null }) }
 }
 
-private fun difficultyColor(difficulty: VoicingDifficulty): Color = when (difficulty) {
+internal fun difficultyColor(difficulty: VoicingDifficulty): Color = when (difficulty) {
     VoicingDifficulty.Easy -> Color(0xFF16836B)
     VoicingDifficulty.Medium -> Color(0xFFB26A00)
     VoicingDifficulty.Hard -> Color(0xFFB23A48)

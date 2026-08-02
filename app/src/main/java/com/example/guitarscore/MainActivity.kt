@@ -183,6 +183,7 @@ data class MainUiState(
     val tunerVisible: Boolean = false,
     val chordHelperVisible: Boolean = false,
     val quickChordName: String? = null,
+    val quizChordNames: List<String> = emptyList(),
     val toolbarMode: ToolbarMode = ToolbarMode.Collapsed,
     val progressMode: ProgressMode = ProgressMode.PageTurn,
     val barsPerLine: Int = 4,
@@ -225,6 +226,11 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
         viewModelScope.launch {
             repository.observeScores().collect { scores ->
                 _uiState.value = _uiState.value.copy(scores = scores)
+            }
+        }
+        viewModelScope.launch {
+            repository.observeQuizChords().collect { chords ->
+                _uiState.value = _uiState.value.copy(quizChordNames = chords.map { it.chordName })
             }
         }
         viewModelScope.launch {
@@ -535,6 +541,14 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
         }
     }
 
+    /** 코드 외우기의 "내 코드 모음"에 넣거나 뺀다. */
+    fun toggleQuizChord(chordName: String) {
+        val saved = chordName in _uiState.value.quizChordNames
+        viewModelScope.launch {
+            if (saved) repository.deleteQuizChord(chordName) else repository.addQuizChord(chordName)
+        }
+    }
+
     fun setToolbarMode(mode: ToolbarMode) = _uiState.run { value = value.copy(toolbarMode = mode) }
 
     fun setProgressMode(mode: ProgressMode) {
@@ -669,7 +683,11 @@ fun GuitarScoreAppUi(viewModel: MainViewModel) {
             state.selected != null -> ViewerScreen(state, viewModel)
             state.destination == AppDestination.Chords -> {
                 BackHandler(onBack = viewModel::showLibrary)
-                ChordTrainerScreen(onBack = viewModel::showLibrary)
+                ChordTrainerScreen(
+                    onBack = viewModel::showLibrary,
+                    quizChordNames = state.quizChordNames,
+                    onToggleQuizChord = viewModel::toggleQuizChord
+                )
             }
             else -> LibraryScreen(state, viewModel)
         }
