@@ -448,9 +448,12 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
         viewModelScope.launch { repository.saveMetadata(metadata) }
     }
 
-    fun setTimeSignature(beats: Int) {
+    fun setTimeSignature(beats: Int, beatUnit: Int) {
         val selected = _uiState.value.selected ?: return
-        val metadata = selected.metadata.copy(timeSignature = beats)
+        val metadata = selected.metadata.copy(
+            timeSignature = beats.coerceIn(1, 16),
+            beatUnit = if (beatUnit == 8) 8 else 4
+        )
         _uiState.value = _uiState.value.copy(selected = selected.copy(metadata = metadata))
         viewModelScope.launch { repository.saveMetadata(metadata) }
     }
@@ -492,7 +495,12 @@ class MainViewModel(private val repository: ScoreRepository) : ViewModel() {
             onState = { _uiState.value = _uiState.value.copy(autoTurnState = it) },
             onTurnToPage = { page -> viewModelScope.launch { goToPage(page) } }
         )
-        metronome.start(metadata.bpm, metadata.timeSignature, muted = state.metronomeMuted) { _, _ -> }
+        metronome.start(
+            bpm = metadata.bpm,
+            beatsPerBar = metadata.timeSignature,
+            groupSize = metadata.beatGroupSize,
+            muted = state.metronomeMuted
+        ) { _, _ -> }
         // 연주가 시작되면 악보를 최대한 넓게 쓰도록 도구 모음을 접는다.
         _uiState.value = _uiState.value.copy(metronomeRunning = true, toolbarMode = ToolbarMode.Collapsed)
     }
@@ -936,7 +944,12 @@ private fun PerformanceToolbar(state: MainUiState, viewModel: MainViewModel, mod
                 IconButton(onClick = viewModel::nextPage) {
                     Icon(Icons.Default.SkipNext, contentDescription = "다음 페이지")
                 }
-                Text("${metadata.bpm}", fontWeight = FontWeight.Bold, modifier = Modifier.width(38.dp))
+                Text(
+                    "${metadata.bpm} · ${metadata.timeSignatureLabel}",
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = Modifier.width(86.dp)
+                )
                 IconButton(onClick = viewModel::toggleMetronomeMuted) {
                     Icon(
                         if (state.metronomeMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
@@ -963,6 +976,19 @@ private fun PerformanceToolbar(state: MainUiState, viewModel: MainViewModel, mod
                 ExpandedToolbarPanel(state = state, viewModel = viewModel)
             }
         }
+    }
+}
+
+@Composable
+private fun TimeSignatureButton(
+    beats: Int,
+    beatUnit: Int,
+    metadata: ScoreMetadataEntity,
+    viewModel: MainViewModel
+) {
+    val selected = metadata.timeSignature == beats && metadata.beatUnit == beatUnit
+    OutlinedButton(onClick = { viewModel.setTimeSignature(beats, beatUnit) }) {
+        Text(if (selected) "✓ $beats/$beatUnit" else "$beats/$beatUnit")
     }
 }
 
@@ -1009,11 +1035,24 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
                 Icon(Icons.Default.Add, contentDescription = "BPM 올리기")
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("박자", fontWeight = FontWeight.SemiBold)
-            listOf(2, 3, 4, 5, 6, 7, 12).forEach { beats ->
-                OutlinedButton(onClick = { viewModel.setTimeSignature(beats) }) {
-                    Text(if (metadata.timeSignature == beats) "✓ ${beats}/4" else "${beats}/4")
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("홑박자", fontWeight = FontWeight.SemiBold, modifier = Modifier.width(52.dp))
+                listOf(2, 3, 4, 5, 6, 7).forEach { beats ->
+                    TimeSignatureButton(beats, 4, metadata, viewModel)
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("겹박자", fontWeight = FontWeight.SemiBold, modifier = Modifier.width(52.dp))
+                listOf(6, 9, 12).forEach { beats ->
+                    TimeSignatureButton(beats, 8, metadata, viewModel)
+                }
+                if (metadata.beatUnit == 8) {
+                    Text(
+                        "BPM 은 8분음표 기준 · 3박씩 묶어 강세",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFB7BDCA)
+                    )
                 }
             }
         }
@@ -1073,7 +1112,7 @@ private fun ExpandedToolbarPanel(state: MainUiState, viewModel: MainViewModel) {
             }
         }
         Text(
-            "스크롤 모드: ${metadata.timeSignature}/4 기준 ${state.barsPerLine}마디마다 ${state.lineScrollDp}dp 이동 · 페이지당 ${state.linesPerPage}줄",
+            "스크롤 모드: ${metadata.timeSignatureLabel} 기준 ${state.barsPerLine}마디마다 ${state.lineScrollDp}dp 이동 · 페이지당 ${state.linesPerPage}줄",
             style = MaterialTheme.typography.bodySmall
         )
         if (state.generatedScrollCues.isNotEmpty()) {

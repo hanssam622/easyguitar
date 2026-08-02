@@ -39,11 +39,24 @@ data class FolderEntity(
 data class ScoreMetadataEntity(
     val scoreId: Long,
     val bpm: Int = 120,
+    /** 박자표의 분자. 한 마디에 들어가는 박의 수. */
     val timeSignature: Int = 4,
+    /** 박자표의 분모. 4 면 4분음표가 한 박, 8 이면 8분음표가 한 박(6/8 같은 겹박자). */
+    val beatUnit: Int = 4,
     val tuningPreset: String = "Standard",
     val capo: Int = 0,
     val notes: String = ""
-)
+) {
+    /** 사람이 읽는 박자표. 예: 4/4, 6/8 */
+    val timeSignatureLabel: String get() = "$timeSignature/$beatUnit"
+
+    /**
+     * 강세를 묶는 단위. 6/8·9/8·12/8 같은 겹박자는 3개씩 묶어 세므로 1박과 4박에 강세가 온다.
+     * 그 외에는 마디 첫 박에만 강세를 준다.
+     */
+    val beatGroupSize: Int
+        get() = if (beatUnit == 8 && timeSignature % 3 == 0 && timeSignature > 3) 3 else 1
+}
 
 @Entity(
     tableName = "turn_cues",

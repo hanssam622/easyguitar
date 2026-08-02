@@ -16,7 +16,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ScoreChordEntity::class,
         QuizChordEntity::class
     ],
-    version = 4,
+    version = 5,
     // 손으로 쓴 마이그레이션을 검증하려면 스키마 JSON 이 있어야 한다.
     exportSchema = true
 )
@@ -72,10 +72,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val migration4To5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 기존 악보는 전부 4분음표 기준이었으므로 기본값 4 로 채운다.
+                db.execSQL("ALTER TABLE score_metadata ADD COLUMN beatUnit INTEGER NOT NULL DEFAULT 4")
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context,
             AppDatabase::class.java,
             "guitar-score.db"
-        ).addMigrations(migration1To2, migration2To3, migration3To4).build()
+        ).addMigrations(migration1To2, migration2To3, migration3To4, migration4To5).build()
     }
 }

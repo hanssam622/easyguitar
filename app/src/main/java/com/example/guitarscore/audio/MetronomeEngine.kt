@@ -18,13 +18,23 @@ class MetronomeEngine {
         muted = value
     }
 
-    fun start(bpm: Int, beatsPerBar: Int, muted: Boolean = false, onBeat: (Int, Long) -> Unit) {
+    /**
+     * @param groupSize 겹박자에서 묶음의 크기. 6/8 이면 3 을 넘겨 1박과 4박에 강세를 준다.
+     *                  홑박자는 1 을 넘기면 마디 첫 박에만 강세가 붙는다.
+     */
+    fun start(
+        bpm: Int,
+        beatsPerBar: Int,
+        groupSize: Int = 1,
+        muted: Boolean = false,
+        onBeat: (Int, Long) -> Unit
+    ) {
         stop()
         this.muted = muted
         running.set(true)
         worker = Thread {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
-            runStream(bpm.coerceIn(30, 260), beatsPerBar.coerceAtLeast(1), onBeat)
+            runStream(bpm.coerceIn(30, 260), beatsPerBar.coerceAtLeast(1), groupSize.coerceAtLeast(1), onBeat)
         }.apply {
             name = "GuitarScoreMetronome"
             start()
@@ -41,7 +51,7 @@ class MetronomeEngine {
         worker = null
     }
 
-    private fun runStream(bpm: Int, beatsPerBar: Int, onBeat: (Int, Long) -> Unit) {
+    private fun runStream(bpm: Int, beatsPerBar: Int, groupSize: Int, onBeat: (Int, Long) -> Unit) {
         val sampleRate = 48_000
         val beatSamples = (sampleRate * 60.0 / bpm).toInt().coerceAtLeast(1)
         val bufferFrames = 512
@@ -70,6 +80,8 @@ class MetronomeEngine {
 
         val regularClick = makeClick(sampleRate, frequency = 1_250.0, gain = 0.42)
         val accentClick = makeClick(sampleRate, frequency = 1_850.0, gain = 0.5)
+        // 겹박자에서 묶음 머리를 짚어 주는 중간 강세.
+        val groupClick = makeClick(sampleRate, frequency = 1_550.0, gain = 0.46)
         val buffer = ShortArray(bufferFrames)
         var sampleCursor = 0L
         var beat = 0
@@ -84,7 +96,12 @@ class MetronomeEngine {
                         onBeat(beat, System.currentTimeMillis())
                         beat++
                     }
-                    val click = if ((beat - 1).floorMod(beatsPerBar) == 0) accentClick else regularClick
+                    val beatInBar = (beat - 1).floorMod(beatsPerBar)
+                    val click = when {
+                        beatInBar == 0 -> accentClick
+                        groupSize > 1 && beatInBar % groupSize == 0 -> groupClick
+                        else -> regularClick
+                    }
                     buffer[i] = if (!muted && positionInBeat < click.size) click[positionInBeat] else 0
                     sampleCursor++
                 }
